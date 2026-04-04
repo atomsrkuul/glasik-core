@@ -5,11 +5,11 @@
 //! Pattern-agnostic: structure emerges from frequency data.
 
 pub const MIN_STR_LEN:  usize = 4;
-pub const MAX_STR_LEN:  usize = 64;
+pub const MAX_STR_LEN:  usize = 128;
 pub const MIN_FREQ:     usize = 3;
 pub const MAX_ENTRIES:  usize = 200;
 pub const TOKEN_BYTES:  usize = 2;
-pub const MAX_LENGTHS:  usize = 16;
+pub const MAX_LENGTHS:  usize = 24;
 
 const BASE: u64 = 131;
 const MOD:  u64 = (1 << 61) - 1; // Mersenne prime -- collision prob ~1/2^61
