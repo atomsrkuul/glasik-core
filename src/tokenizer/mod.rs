@@ -12,7 +12,7 @@
 pub mod dictionary;
 pub mod codon;
 
-use dictionary::{build, serialize, deserialize, DictEntry};
+use dictionary::{build, serialize, deserialize};
 use codon::{encode as codon_encode, decode as codon_decode};
 
 /// Magic prefix for tokenized buffers.

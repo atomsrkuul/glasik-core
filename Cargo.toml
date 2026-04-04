@@ -12,7 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 flate2 = "1.0"
-pyo3 = { version = "0.21", features = ["extension-module"], optional = true }
+pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 
 [features]
 default = []
