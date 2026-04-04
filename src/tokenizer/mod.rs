@@ -17,7 +17,7 @@ use codon::{encode as codon_encode, decode as codon_decode};
 
 /// Magic prefix for tokenized buffers.
 /// Allows decoder to detect whether tokenization was applied.
-const TOK_MAGIC: [u8; 4] = [0x47, 0x4E, 0x54, 0x4B]; // "GNTK"
+pub const TOK_MAGIC: [u8; 4] = [0x47, 0x4E, 0x54, 0x4B]; // "GNTK"
 
 /// Tokenizer statistics from last encode call.
 #[derive(Debug, Default, Clone)]

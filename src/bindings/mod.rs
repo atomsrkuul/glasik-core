@@ -1,6 +1,6 @@
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
-use crate::pipeline::{compress, decompress, compress_with_stats};
+use pyo3::types::{PyBytes, PyDict, PyList};
+use crate::pipeline::{compress, decompress, compress_with_stats, compress_batch_with_stats};
 
 #[pyfunction]
 fn gn_compress(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
@@ -26,11 +26,35 @@ fn gn_compress_stats(py: Python, data: &[u8]) -> PyResult<(Py<PyBytes>, Py<PyDic
     Ok((PyBytes::new(py, &compressed).into(), dict.into()))
 }
 
+#[pyfunction]
+fn gn_compress_batch(py: Python, messages: Vec<Vec<u8>>) -> PyResult<Py<PyList>> {
+    let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+    let (frames, _) = compress_batch_with_stats(&refs);
+    let list = PyList::new(py, frames.iter().map(|f| PyBytes::new(py, f)))?;
+    Ok(list.into())
+}
+
+#[pyfunction]
+fn gn_compress_batch_stats(py: Python, messages: Vec<Vec<u8>>) -> PyResult<(Py<PyList>, Py<PyDict>)> {
+    let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
+    let (frames, stats) = compress_batch_with_stats(&refs);
+    let list = PyList::new(py, frames.iter().map(|f| PyBytes::new(py, f)))?;
+    let dict = PyDict::new(py);
+    dict.set_item("input_bytes",      stats.input_bytes)?;
+    dict.set_item("tokenized_bytes",  stats.tokenized_bytes)?;
+    dict.set_item("compressed_bytes", stats.compressed_bytes)?;
+    dict.set_item("framed_bytes",     stats.framed_bytes)?;
+    dict.set_item("ratio",            stats.ratio())?;
+    Ok((list.into(), dict.into()))
+}
+
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
     m.add_function(wrap_pyfunction!(gn_decompress, m)?)?;
     m.add_function(wrap_pyfunction!(gn_compress_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_compress_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_compress_batch_stats, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
