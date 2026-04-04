@@ -10,10 +10,14 @@
 
 use crate::codec::crc::crc32;
 
-pub const MAGIC:   [u8; 4] = [0x47, 0x4E, 0x4C, 0x5A];
-pub const VERSION: u8      = 2;
-pub const FLAG_COMPRESSION: u8 = 0x01;
+pub const MAGIC:           [u8; 4] = [0x47, 0x4E, 0x4C, 0x5A];
+pub const VERSION:         u8      = 2;
+pub const FLAG_COMPRESSION: u8     = 0x01;
+pub const HEADER_LEN:      usize   = 10; // magic+ver+flags+len
+pub const TRAILER_LEN:     usize   = 4;  // crc32
+pub const MIN_FRAME_LEN:   usize   = HEADER_LEN + TRAILER_LEN;
 
+/// Owned frame -- used when building frames for transmission.
 #[derive(Debug, PartialEq)]
 pub struct Frame {
     pub version: u8,
@@ -21,14 +25,40 @@ pub struct Frame {
     pub payload: Vec<u8>,
 }
 
+/// Zero-copy decoded frame -- borrows directly from source buffer.
+/// Lifetime tied to the buffer it was decoded from.
+/// No heap allocation on decode path.
+#[derive(Debug, PartialEq)]
+pub struct FrameView<'a> {
+    pub version: u8,
+    pub flags:   u8,
+    pub payload: &'a [u8],  // slice into original buffer
+}
+
+impl<'a> FrameView<'a> {
+    #[inline]
+    pub fn is_compressed(&self) -> bool {
+        self.flags & FLAG_COMPRESSION != 0
+    }
+    /// Promote to owned Frame when you need to store or mutate.
+    pub fn to_owned(&self) -> Frame {
+        Frame {
+            version: self.version,
+            flags:   self.flags,
+            payload: self.payload.to_vec(),
+        }
+    }
+}
+
 impl Frame {
     pub fn new(payload: Vec<u8>, compressed: bool) -> Self {
         Frame {
             version: VERSION,
-            flags: if compressed { FLAG_COMPRESSION } else { 0 },
+            flags:   if compressed { FLAG_COMPRESSION } else { 0 },
             payload,
         }
     }
+    #[inline]
     pub fn is_compressed(&self) -> bool {
         self.flags & FLAG_COMPRESSION != 0
     }
@@ -54,32 +84,50 @@ impl std::fmt::Display for FrameError {
     }
 }
 
+/// Encode an owned Frame into bytes. Allocates output buffer.
 pub fn encode(frame: &Frame) -> Vec<u8> {
-    let mut out = Vec::with_capacity(10 + frame.payload.len() + 4);
+    let mut out = Vec::with_capacity(HEADER_LEN + frame.payload.len() + TRAILER_LEN);
     out.extend_from_slice(&MAGIC);
     out.push(frame.version);
     out.push(frame.flags);
-    let len = frame.payload.len() as u32;
-    out.extend_from_slice(&len.to_le_bytes());
+    out.extend_from_slice(&(frame.payload.len() as u32).to_le_bytes());
     out.extend_from_slice(&frame.payload);
     let crc = crc32(&out);
     out.extend_from_slice(&crc.to_le_bytes());
     out
 }
 
-pub fn decode(data: &[u8]) -> Result<Frame, FrameError> {
-    if data.len() < 14 { return Err(FrameError::Truncated); }
-    if data[0..4] != MAGIC { return Err(FrameError::InvalidMagic); }
+/// Decode bytes into a FrameView. Zero allocation -- payload is a
+/// slice into `data`. Verifies magic, version, and CRC32.
+pub fn decode_view(data: &[u8]) -> Result<FrameView<'_>, FrameError> {
+    if data.len() < MIN_FRAME_LEN { return Err(FrameError::Truncated); }
+    if data[0..4] != MAGIC        { return Err(FrameError::InvalidMagic); }
     let version = data[4];
     if version != VERSION { return Err(FrameError::UnsupportedVersion(version)); }
     let flags = data[5];
-    let len = u32::from_le_bytes(data[6..10].try_into().map_err(|_| FrameError::Truncated)?) as usize;
-    let payload_end = 10 + len;
-    if data.len() < payload_end + 4 { return Err(FrameError::Truncated); }
-    let stored   = u32::from_le_bytes(data[payload_end..payload_end+4].try_into().map_err(|_| FrameError::Truncated)?);
+    let len = u32::from_le_bytes(
+        data[6..10].try_into().map_err(|_| FrameError::Truncated)?
+    ) as usize;
+    let payload_end = HEADER_LEN + len;
+    if data.len() < payload_end + TRAILER_LEN { return Err(FrameError::Truncated); }
+    let stored   = u32::from_le_bytes(
+        data[payload_end..payload_end + TRAILER_LEN]
+            .try_into().map_err(|_| FrameError::Truncated)?
+    );
     let computed = crc32(&data[..payload_end]);
     if stored != computed { return Err(FrameError::CrcMismatch { stored, computed }); }
-    Ok(Frame { version, flags, payload: data[10..payload_end].to_vec() })
+    Ok(FrameView {
+        version,
+        flags,
+        payload: &data[HEADER_LEN..payload_end], // zero-copy slice
+    })
+}
+
+/// Decode into an owned Frame. Allocates. Use when you need to store
+/// the payload beyond the lifetime of the source buffer.
+#[inline]
+pub fn decode(data: &[u8]) -> Result<Frame, FrameError> {
+    decode_view(data).map(|v| v.to_owned())
 }
 
 #[cfg(test)]
@@ -89,9 +137,15 @@ mod tests {
     fn roundtrip(payload: Vec<u8>, compressed: bool) {
         let frame   = Frame::new(payload.clone(), compressed);
         let encoded = encode(&frame);
-        let decoded = decode(&encoded).expect("decode failed");
-        assert_eq!(decoded.payload, payload);
-        assert_eq!(decoded.is_compressed(), compressed);
+
+        // Zero-copy path
+        let view = decode_view(&encoded).expect("decode_view failed");
+        assert_eq!(view.payload, payload.as_slice());
+        assert_eq!(view.is_compressed(), compressed);
+
+        // Owned path
+        let owned = decode(&encoded).expect("decode failed");
+        assert_eq!(owned.payload, payload);
     }
 
     #[test]
@@ -113,7 +167,7 @@ mod tests {
     fn test_magic_check() {
         let mut enc = encode(&Frame::new(b"data".to_vec(), false));
         enc[0] = 0x00;
-        assert!(matches!(decode(&enc), Err(FrameError::InvalidMagic)));
+        assert!(matches!(decode_view(&enc), Err(FrameError::InvalidMagic)));
     }
 
     #[test]
@@ -121,12 +175,34 @@ mod tests {
         let mut enc = encode(&Frame::new(b"important".to_vec(), false));
         let last = enc.len();
         enc[last - 5] ^= 0xFF;
-        assert!(matches!(decode(&enc), Err(FrameError::CrcMismatch { .. })));
+        assert!(matches!(decode_view(&enc), Err(FrameError::CrcMismatch { .. })));
     }
 
     #[test]
     fn test_truncated() {
         let enc = encode(&Frame::new(b"data".to_vec(), false));
-        assert!(matches!(decode(&enc[..8]), Err(FrameError::Truncated)));
+        assert!(matches!(decode_view(&enc[..8]), Err(FrameError::Truncated)));
+    }
+
+    #[test]
+    fn test_zero_copy_no_alloc() {
+        // FrameView payload is a slice into encoded -- same pointer
+        let payload = b"zero copy test".to_vec();
+        let encoded = encode(&Frame::new(payload.clone(), false));
+        let view    = decode_view(&encoded).unwrap();
+        // Verify the slice points into encoded, not a copy
+        let view_ptr    = view.payload.as_ptr();
+        let encoded_ptr = encoded[HEADER_LEN..].as_ptr();
+        assert_eq!(view_ptr, encoded_ptr, "payload should be a slice, not a copy");
+    }
+
+    #[test]
+    fn test_promote_to_owned() {
+        let payload = b"promote me".to_vec();
+        let encoded = encode(&Frame::new(payload.clone(), true));
+        let view    = decode_view(&encoded).unwrap();
+        let owned   = view.to_owned();
+        assert_eq!(owned.payload, payload);
+        assert!(owned.is_compressed());
     }
 }
