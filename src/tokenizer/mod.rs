@@ -1,3 +1,7 @@
 //! Codon-table tokenizer
-pub mod codon;
+//!
+//! dictionary  -- frequency analysis, entry selection, serialization
+//! codon       -- symbol substitution (encode/decode)
+
 pub mod dictionary;
+pub mod codon;
