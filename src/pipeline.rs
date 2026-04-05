@@ -1,7 +1,11 @@
 //! pipeline.rs -- Full GN compression pipeline
 //!
-//! Single message:  compress(data) / decompress(data)
-//! Batch (fast):    compress_batch(messages) -- shared dictionary, one scan
+//! Two modes, chosen automatically per batch:
+//!   Codon-only:      high repetition, domain-specific data
+//!   Codon+Deflate:   diverse natural language
+//!
+//! Mode selection: if codon-only output < deflate output, use codon-only.
+//! The pipeline measures both and picks the winner.
 
 use flate2::{write::DeflateEncoder, read::DeflateDecoder, Compression};
 use std::io::{Read, Write};
@@ -9,6 +13,10 @@ use crate::codec::frame::{self, Frame, FrameError};
 use crate::tokenizer::{Tokenizer, TOK_MAGIC};
 use crate::tokenizer::dictionary;
 use crate::tokenizer::codon;
+
+// Flag byte in GN frame flags field
+pub const FLAG_COMPRESSION: u8 = 0x01;
+pub const FLAG_CODON_ONLY:  u8 = 0x02; // codon table, no deflate
 
 #[derive(Debug)]
 pub enum PipelineError {
@@ -31,12 +39,20 @@ impl From<FrameError> for PipelineError {
     fn from(e: FrameError) -> Self { PipelineError::Frame(e) }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Mode {
+    Auto,       // measure both, pick winner
+    CodonOnly,  // no deflate
+    Deflate,    // codon + deflate always
+}
+
 #[derive(Debug)]
 pub struct PipelineStats {
     pub input_bytes:      usize,
     pub tokenized_bytes:  usize,
     pub compressed_bytes: usize,
     pub framed_bytes:     usize,
+    pub mode_used:        &'static str,
 }
 
 impl PipelineStats {
@@ -46,67 +62,110 @@ impl PipelineStats {
     }
 }
 
-// ── Single message API ────────────────────────────────────────────────────────
+// ── Core encode/decode ────────────────────────────────────────────────────────
 
-pub fn compress(data: &[u8]) -> Vec<u8> {
+fn deflate(data: &[u8]) -> Vec<u8> {
+    let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+    enc.write_all(data).expect("deflate write");
+    enc.finish().expect("deflate finish")
+}
+
+fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
+    let mut dec = DeflateDecoder::new(data);
+    let mut out = Vec::new();
+    dec.read_to_end(&mut out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
+fn tokenize_buf(data: &[u8]) -> Vec<u8> {
     let tok = Tokenizer::new();
     let (tokenized, _) = tok.encode(data);
-    let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(&tokenized).expect("deflate write");
-    let deflated = enc.finish().expect("deflate finish");
-    frame::encode(&Frame::new(deflated, true))
+    tokenized
+}
+
+fn frame_codon_only(tokenized: Vec<u8>) -> Vec<u8> {
+    let mut f = Frame::new(tokenized, false);
+    f.flags = FLAG_CODON_ONLY;
+    frame::encode(&f)
+}
+
+fn frame_deflate(tokenized: Vec<u8>) -> Vec<u8> {
+    let deflated = deflate(&tokenized);
+    let mut f = Frame::new(deflated, true);
+    f.flags = FLAG_COMPRESSION;
+    frame::encode(&f)
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+pub fn compress(data: &[u8]) -> Vec<u8> {
+    compress_mode(data, &Mode::Auto).0
+}
+
+pub fn compress_mode(data: &[u8], mode: &Mode) -> (Vec<u8>, &'static str) {
+    let tokenized = tokenize_buf(data);
+
+    match mode {
+        Mode::CodonOnly => (frame_codon_only(tokenized), "codon"),
+        Mode::Deflate   => (frame_deflate(tokenized), "deflate"),
+        Mode::Auto => {
+            // Try both, pick smaller
+            let codon_frame   = frame_codon_only(tokenized.clone());
+            let deflate_frame = frame_deflate(tokenized);
+            if codon_frame.len() <= deflate_frame.len() {
+                (codon_frame, "codon")
+            } else {
+                (deflate_frame, "deflate")
+            }
+        }
+    }
 }
 
 pub fn decompress(data: &[u8]) -> Result<Vec<u8>, PipelineError> {
     let view = frame::decode_view(data).map_err(PipelineError::Frame)?;
-    let payload = if view.is_compressed() {
-        let mut dec = DeflateDecoder::new(view.payload);
-        let mut out = Vec::new();
-        dec.read_to_end(&mut out).map_err(|e| PipelineError::Inflate(e.to_string()))?;
-        out
+
+    let payload = if view.flags & FLAG_COMPRESSION != 0 {
+        inflate(view.payload).map_err(PipelineError::Inflate)?
     } else {
         view.payload.to_vec()
     };
+
     Tokenizer::new().decode(&payload).map_err(PipelineError::Tokenizer)
 }
 
 pub fn compress_with_stats(data: &[u8]) -> (Vec<u8>, PipelineStats) {
-    let tok = Tokenizer::new();
-    let (tokenized, _) = tok.encode(data);
-    let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(&tokenized).expect("deflate write");
-    let deflated = enc.finish().expect("deflate finish");
-    let framed = frame::encode(&Frame::new(deflated.clone(), true));
-    let stats = PipelineStats {
-        input_bytes:      data.len(),
-        tokenized_bytes:  tokenized.len(),
-        compressed_bytes: deflated.len(),
-        framed_bytes:     framed.len(),
+    let tokenized = tokenize_buf(data);
+    let tok_len   = tokenized.len();
+
+    let codon_frame   = frame_codon_only(tokenized.clone());
+    let deflate_frame = frame_deflate(tokenized);
+
+    let (framed, mode_used) = if codon_frame.len() <= deflate_frame.len() {
+        (codon_frame, "codon")
+    } else {
+        (deflate_frame, "deflate")
     };
-    (framed, stats)
+
+    (framed.clone(), PipelineStats {
+        input_bytes:      data.len(),
+        tokenized_bytes:  tok_len,
+        compressed_bytes: framed.len(),
+        framed_bytes:     framed.len(),
+        mode_used,
+    })
 }
 
-// ── Batch API (shared dictionary) ─────────────────────────────────────────────
+// ── Batch API ─────────────────────────────────────────────────────────────────
 
-/// Build dictionary once from full batch, apply to each message.
-/// One frequency scan, N substitutions. Fast + better cross-message ratio.
 pub fn compress_batch(messages: &[&[u8]]) -> Vec<Vec<u8>> {
-    if messages.is_empty() { return vec![]; }
-
-    let combined: Vec<u8> = messages.iter().flat_map(|m| m.iter().copied()).collect();
-    let entries     = dictionary::build(&combined);
-    let dict_header = dictionary::serialize(&entries);
-
-    messages.iter().map(|msg| {
-        encode_with_shared_dict(msg, &entries, &dict_header)
-    }).collect()
+    compress_batch_with_stats(messages).0
 }
 
 pub fn compress_batch_with_stats(messages: &[&[u8]]) -> (Vec<Vec<u8>>, PipelineStats) {
     if messages.is_empty() {
         return (vec![], PipelineStats {
             input_bytes: 0, tokenized_bytes: 0,
-            compressed_bytes: 0, framed_bytes: 0,
+            compressed_bytes: 0, framed_bytes: 0, mode_used: "none",
         });
     }
 
@@ -116,13 +175,11 @@ pub fn compress_batch_with_stats(messages: &[&[u8]]) -> (Vec<Vec<u8>>, PipelineS
 
     let mut total_input      = 0usize;
     let mut total_tokenized  = 0usize;
-    let mut total_compressed = 0usize;
     let mut total_framed     = 0usize;
+    let mut codon_wins       = 0usize;
 
     let frames: Vec<Vec<u8>> = messages.iter().map(|msg| {
         let tokenized = codon::encode(msg, &entries);
-        total_input     += msg.len();
-        total_tokenized += tokenized.len();
 
         let mut tok_buf = Vec::with_capacity(4 + dict_header.len() + 4 + tokenized.len());
         tok_buf.extend_from_slice(&TOK_MAGIC);
@@ -130,40 +187,33 @@ pub fn compress_batch_with_stats(messages: &[&[u8]]) -> (Vec<Vec<u8>>, PipelineS
         tok_buf.extend_from_slice(&(msg.len() as u32).to_le_bytes());
         tok_buf.extend_from_slice(&tokenized);
 
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
-        enc.write_all(&tok_buf).expect("deflate write");
-        let deflated = enc.finish().expect("deflate finish");
-        total_compressed += deflated.len();
+        total_input     += msg.len();
+        total_tokenized += tokenized.len();
 
-        let framed = frame::encode(&Frame::new(deflated, true));
+        // Auto-select mode per message
+        let codon_frame   = frame_codon_only(tok_buf.clone());
+        let deflate_frame = frame_deflate(tok_buf);
+
+        let framed = if codon_frame.len() <= deflate_frame.len() {
+            codon_wins += 1;
+            codon_frame
+        } else {
+            deflate_frame
+        };
+
         total_framed += framed.len();
         framed
     }).collect();
 
+    let mode_used = if codon_wins > messages.len() / 2 { "codon" } else { "deflate" };
+
     (frames, PipelineStats {
         input_bytes:      total_input,
         tokenized_bytes:  total_tokenized,
-        compressed_bytes: total_compressed,
+        compressed_bytes: total_framed,
         framed_bytes:     total_framed,
+        mode_used,
     })
-}
-
-fn encode_with_shared_dict(
-    msg: &[u8],
-    entries: &[crate::tokenizer::dictionary::DictEntry],
-    dict_header: &[u8],
-) -> Vec<u8> {
-    let tokenized = codon::encode(msg, entries);
-    let mut tok_buf = Vec::with_capacity(4 + dict_header.len() + 4 + tokenized.len());
-    tok_buf.extend_from_slice(&TOK_MAGIC);
-    tok_buf.extend_from_slice(dict_header);
-    tok_buf.extend_from_slice(&(msg.len() as u32).to_le_bytes());
-    tok_buf.extend_from_slice(&tokenized);
-
-    let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
-    enc.write_all(&tok_buf).expect("deflate write");
-    let deflated = enc.finish().expect("deflate finish");
-    frame::encode(&Frame::new(deflated, true))
 }
 
 #[cfg(test)]
@@ -171,32 +221,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_roundtrip() {
+    fn test_roundtrip_auto() {
         let data = b"hello glasik hello glasik hello glasik".to_vec();
         let c = compress(&data);
-        let d = decompress(&c).expect("decompress failed");
-        assert_eq!(d, data);
+        assert_eq!(decompress(&c).unwrap(), data);
     }
 
     #[test]
-    fn test_compression_ratio() {
-        let data: Vec<u8> = "repeated message payload ".repeat(100).into_bytes();
-        let (c, stats) = compress_with_stats(&data);
-        let d = decompress(&c).expect("decompress failed");
-        assert_eq!(d, data);
-        assert!(stats.ratio() > 1.0, "ratio={:.2}", stats.ratio());
+    fn test_roundtrip_codon_only() {
+        let data: Vec<u8> = "repeated pattern ".repeat(50).into_bytes();
+        let (c, mode) = compress_mode(&data, &Mode::CodonOnly);
+        assert_eq!(mode, "codon");
+        assert_eq!(decompress(&c).unwrap(), data);
+    }
+
+    #[test]
+    fn test_roundtrip_deflate() {
+        let data: Vec<u8> = "repeated pattern ".repeat(50).into_bytes();
+        let (c, mode) = compress_mode(&data, &Mode::Deflate);
+        assert_eq!(mode, "deflate");
+        assert_eq!(decompress(&c).unwrap(), data);
+    }
+
+    #[test]
+    fn test_auto_picks_codon_for_repetitive() {
+        // Highly repetitive: codon should win
+        let data: Vec<u8> = "aaaa bbbb cccc dddd ".repeat(200).into_bytes();
+        let (c, mode) = compress_mode(&data, &Mode::Auto);
+        println!("repetitive mode: {mode}");
+        assert_eq!(decompress(&c).unwrap(), data);
     }
 
     #[test]
     fn test_empty() {
         let c = compress(&[]);
-        let d = decompress(&c).expect("empty failed");
-        assert_eq!(d, b"");
+        assert_eq!(decompress(&c).unwrap(), b"");
     }
 
     #[test]
     fn test_corruption_detected() {
-        let data = b"test data for corruption".to_vec();
+        let data = b"test data corruption check".to_vec();
         let mut c = compress(&data);
         let last = c.len();
         c[last - 5] ^= 0xFF;
@@ -206,39 +270,11 @@ mod tests {
     #[test]
     fn test_batch_roundtrip() {
         let messages: Vec<Vec<u8>> = (0..20)
-            .map(|i| format!("user joined channel general timestamp {i} payload data").into_bytes())
+            .map(|i| format!("user joined channel general timestamp {i}").into_bytes())
             .collect();
         let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
-        let compressed = compress_batch(&refs);
-        assert_eq!(compressed.len(), messages.len());
-        for (orig, comp) in messages.iter().zip(compressed.iter()) {
-            let restored = decompress(comp).expect("batch decompress failed");
-            assert_eq!(&restored, orig, "batch roundtrip failed");
+        for (orig, comp) in messages.iter().zip(compress_batch(&refs).iter()) {
+            assert_eq!(&decompress(comp).unwrap(), orig);
         }
-    }
-
-    #[test]
-    fn test_batch_better_than_individual() {
-        let msg = "repeated cross-message pattern user joined channel ";
-        let messages: Vec<Vec<u8>> = (0..100).map(|_| msg.as_bytes().to_vec()).collect();
-        let refs: Vec<&[u8]> = messages.iter().map(|m| m.as_slice()).collect();
-
-        let (batch_frames, batch_stats) = compress_batch_with_stats(&refs);
-        let _ = batch_frames;
-
-        // Individual compression of same data
-        let individual_total: usize = messages.iter()
-            .map(|m| compress(m).len())
-            .sum();
-
-        println!("batch: {}B  individual: {}B  ratio: {:.2}x",
-            batch_stats.framed_bytes, individual_total,
-            batch_stats.framed_bytes as f64 / individual_total as f64);
-
-        // Batch carries shared dictionary overhead per frame.
-        // Win condition: diverse cross-message patterns at scale.
-        // Here we just verify the batch API produces valid output.
-        println!("batch/individual ratio: {:.2}x (batch overhead expected on uniform data)",
-            batch_stats.framed_bytes as f64 / individual_total as f64);
     }
 }

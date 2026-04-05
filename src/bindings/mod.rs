@@ -48,6 +48,58 @@ fn gn_compress_batch_stats(py: Python, messages: Vec<Vec<u8>>) -> PyResult<(Py<P
     Ok((list.into(), dict.into()))
 }
 
+
+// ── Sliding window API ────────────────────────────────────────────────────────
+/// Stateful sliding window compressor.
+/// Create once, compress many batches through it.
+/// Dictionary accumulates domain knowledge across batches.
+#[pyclass]
+pub struct GlasikSliding {
+    inner: crate::tokenizer::sliding::SlidingTokenizer,
+}
+
+#[pymethods]
+impl GlasikSliding {
+    #[new]
+    fn new() -> Self {
+        GlasikSliding { inner: crate::tokenizer::sliding::SlidingTokenizer::new() }
+    }
+
+    fn compress(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        use crate::codec::frame::{self, Frame};
+
+        let tokenized = self.inner.encode(data);
+
+        // Auto-select: deflate or codon-only
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&tokenized).unwrap();
+        let deflated = enc.finish().unwrap();
+
+        let framed = if deflated.len() < tokenized.len() {
+            frame::encode(&Frame::new(deflated, true))
+        } else {
+            let mut f = Frame::new(tokenized, false);
+            f.flags = crate::pipeline::FLAG_CODON_ONLY;
+            frame::encode(&f)
+        };
+
+        Ok(PyBytes::new(py, &framed).into())
+    }
+
+    fn decompress(&self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        match crate::pipeline::decompress(data) {
+            Ok(d)  => Ok(PyBytes::new(py, &d).into()),
+            Err(e) => Err(pyo3::exceptions::PyValueError::new_err(e.to_string())),
+        }
+    }
+
+    fn stats(&self) -> (usize, u64) {
+        self.inner.stats()
+    }
+}
+
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
@@ -55,6 +107,7 @@ fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress_stats, m)?)?;
     m.add_function(wrap_pyfunction!(gn_compress_batch, m)?)?;
     m.add_function(wrap_pyfunction!(gn_compress_batch_stats, m)?)?;
+    m.add_class::<GlasikSliding>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
