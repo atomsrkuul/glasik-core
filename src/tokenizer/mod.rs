@@ -8,6 +8,7 @@
 //! Decode: single pass using merged dictionary.
 //! Clean boundary -- second pass never touches token regions.
 
+pub mod preseed;
 pub mod sliding;
 pub mod dictionary;
 pub mod codon;
@@ -34,16 +35,58 @@ impl TokenizerStats {
     }
 }
 
+
+/// Remove dictionary entries that produced no tokens in the encoded output.
+/// Reduces header overhead by only serializing entries that actually fired.
+fn prune_to_fired(entries: &[dictionary::DictEntry], encoded: &[u8]) -> Vec<dictionary::DictEntry> {
+    use codon::ESCAPE;
+    // Count which token IDs appear in the encoded output
+    let mut fired = vec![false; entries.len()];
+    let mut i = 0;
+    while i < encoded.len() {
+        if encoded[i] == ESCAPE && i + 1 < encoded.len() {
+            let id = encoded[i + 1] as usize;
+            if id > 0 && id - 1 < fired.len() {
+                fired[id - 1] = true;
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    entries.iter().enumerate()
+        .filter(|(i, _)| fired[*i])
+        .map(|(_, e)| e.clone())
+        .collect()
+}
+
 pub struct Tokenizer;
 
 impl Tokenizer {
     pub fn new() -> Self { Tokenizer }
 
-    /// Two-pass encode.
+    /// Two-pass encode with category-aware pre-seeding.
     /// Returns (encoded_buffer, stats).
     pub fn encode(&self, buf: &[u8]) -> (Vec<u8>, TokenizerStats) {
-        // ── Pass 1 ──────────────────────────────────────────────────────
-        let pass1 = build(buf);
+        // ── Category detection + preseed ─────────────────────────────────
+        let category  = crate::tokenizer::preseed::detect(buf);
+        let mut pass1 = crate::tokenizer::preseed::preseed(&category);
+
+        // ── Pass 1: merge preseed with adaptive dict ─────────────────────
+        let adaptive = build(buf);
+        let preseed_bytes: std::collections::HashSet<Vec<u8>> =
+            pass1.iter().map(|e| e.bytes.clone()).collect();
+        for entry in adaptive {
+            if preseed_bytes.contains(&entry.bytes) { continue; }
+            pass1.push(entry);
+        }
+        pass1.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+        pass1.truncate(dictionary::MAX_ENTRIES);
+
+        // Dry-run to find which entries fire, then prune and re-encode.
+        // This removes unfired entries from the header without breaking IDs.
+        let dry_run   = codon_encode(buf, &pass1);
+        let pass1     = prune_to_fired(&pass1, &dry_run);
         let tokenized1 = codon_encode(buf, &pass1);
 
         // ── Pass 2: residual only ────────────────────────────────────────
