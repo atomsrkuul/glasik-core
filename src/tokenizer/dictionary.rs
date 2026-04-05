@@ -67,17 +67,70 @@ fn scan_length(
     }
 }
 
+/// Per-length saving weights — shared across calls via thread_local.
+/// Tracks which lengths yield the most saving, biases future scans.
+fn length_weights(max_len: usize) -> Vec<(usize, f64)> {
+    use std::cell::RefCell;
+    thread_local! {
+        static WEIGHTS: RefCell<std::collections::HashMap<usize, f64>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+    WEIGHTS.with(|w| {
+        let w = w.borrow();
+        let max_len = MAX_STR_LEN.min(max_len);
+        if max_len < MIN_STR_LEN { return vec![]; }
+        let range = max_len - MIN_STR_LEN;
+        let step  = (range / MAX_LENGTHS).max(1);
+        let mut lengths = Vec::new();
+        let mut len = MIN_STR_LEN;
+        while len <= max_len {
+            let weight = w.get(&len).copied().unwrap_or(1.0);
+            lengths.push((len, weight));
+            len += step;
+        }
+        // Sort by weight descending -- scan most productive lengths first
+        lengths.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        lengths
+    })
+}
+
+fn update_weights(savings_per_len: &std::collections::HashMap<usize, usize>) {
+    use std::cell::RefCell;
+    thread_local! {
+        static WEIGHTS: RefCell<std::collections::HashMap<usize, f64>> =
+            RefCell::new(std::collections::HashMap::new());
+    }
+    WEIGHTS.with(|w| {
+        let mut w = w.borrow_mut();
+        let total: usize = savings_per_len.values().sum();
+        if total == 0 { return; }
+        for (&len, &saving) in savings_per_len {
+            let ratio = saving as f64 / total as f64;
+            // Exponential moving average: 80% old, 20% new observation
+            let entry = w.entry(len).or_insert(1.0);
+            *entry = *entry * 0.8 + ratio * MAX_LENGTHS as f64 * 0.2;
+        }
+    });
+}
+
 fn build_frequency_map(buf: &[u8]) -> std::collections::HashMap<Vec<u8>, usize> {
     let mut freq = std::collections::HashMap::new();
-    let max_len = MAX_STR_LEN.min(buf.len() / 2);
+    let max_len  = MAX_STR_LEN.min(buf.len() / 2);
     if max_len < MIN_STR_LEN { return freq; }
-    let range = max_len - MIN_STR_LEN;
-    let step  = (range / MAX_LENGTHS).max(1);
-    let mut len = MIN_STR_LEN;
-    while len <= max_len {
-        scan_length(buf, len, &mut freq);
-        len += step;
+
+    let lengths = length_weights(max_len);
+    let mut savings_per_len: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+
+    for (len, _weight) in &lengths {
+        let before = freq.values().map(|&v: &usize| v).sum::<usize>();
+        scan_length(buf, *len, &mut freq);
+        let after  = freq.values().sum::<usize>();
+        savings_per_len.insert(*len, after.saturating_sub(before));
     }
+
+    // Feed results back into weight table
+    update_weights(&savings_per_len);
     freq
 }
 

@@ -80,7 +80,14 @@ fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
 fn tokenize_buf(data: &[u8]) -> Vec<u8> {
     let tok = Tokenizer::new();
     let (tokenized, _) = tok.encode(data);
-    tokenized
+    // Only use tokenized output if it actually reduced size.
+    // If dict header overhead expanded the data, pass raw to deflate.
+    // Always use tokenized for empty input (has magic header for decoder).
+    if data.is_empty() || tokenized.len() < data.len() {
+        tokenized
+    } else {
+        data.to_vec()
+    }
 }
 
 fn frame_codon_only(tokenized: Vec<u8>) -> Vec<u8> {
