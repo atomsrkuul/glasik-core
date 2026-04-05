@@ -1,0 +1,198 @@
+//! ans.rs -- Minimal correct ANS
+//! Uses exact JS encode formula with verified matching decode.
+//! Renorm bound: state in [f, f*256) before encode step.
+
+const M: u32 = 1 << 11; // table size = 2048
+
+#[derive(Debug, Clone)]
+pub struct FreqTable {
+    pub freq:   [u32; 256],
+    pub cumsum: [u32; 257],
+    pub total:  u32,
+}
+
+impl FreqTable {
+    pub fn build(data: &[u8]) -> Self {
+        let mut raw = [0u32; 256];
+        for &b in data { raw[b as usize] += 1; }
+        Self::normalize(&raw, data.len())
+    }
+
+    fn normalize(raw: &[u32; 256], n: usize) -> Self {
+        let mut freq = [0u32; 256];
+        if n == 0 { return FreqTable { freq, cumsum: [0;257], total: 0 }; }
+        let mut total = 0i32;
+        for s in 0..256 {
+            if raw[s] == 0 { continue; }
+            let f = ((raw[s] as f64 / n as f64) * M as f64).round() as u32;
+            freq[s] = f.max(1);
+            total += freq[s] as i32;
+        }
+        let mut diff = M as i32 - total;
+        let mut order: Vec<usize> = (0..256).filter(|&s| raw[s]>0).collect();
+        order.sort_unstable_by(|&a,&b| raw[b].cmp(&raw[a]));
+        let mut i = 0;
+        while diff > 0 { freq[order[i%order.len()]]+=1; diff-=1; i+=1; }
+        while diff < 0 {
+            if let Some(&s)=order.iter().find(|&&s|freq[s]>1){freq[s]-=1;diff+=1;}
+            else { break; }
+        }
+        let mut cumsum = [0u32;257];
+        for s in 0..256 { cumsum[s+1]=cumsum[s]+freq[s]; }
+        FreqTable { freq, cumsum, total: cumsum[256] }
+    }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let entries: Vec<_> = (0..256usize).filter(|&s|self.freq[s]>0)
+            .map(|s|(s as u8, self.freq[s])).collect();
+        let count = entries.len() as u16;
+        let mut out = count.to_le_bytes().to_vec();
+        for (s,f) in entries { out.push(s); out.extend_from_slice(&f.to_le_bytes()); }
+        out
+    }
+
+    pub fn deserialize(data: &[u8]) -> Option<(Self, usize)> {
+        if data.len() < 2 { return None; }
+        let count = u16::from_le_bytes(data[0..2].try_into().ok()?) as usize;
+        if data.len() < 2+count*5 { return None; }
+        let mut raw = [0u32;256]; let mut n = 0usize;
+        for i in 0..count {
+            let s = data[2+i*5] as usize;
+            let f = u32::from_le_bytes(data[3+i*5..7+i*5].try_into().ok()?);
+            raw[s]=f; n+=f as usize;
+        }
+        Some((Self::normalize(&raw,n), 2+count*5))
+    }
+
+    fn find_sym(&self, r: u32) -> usize {
+        // r is in [0, total). Find s such that cumsum[s] <= r < cumsum[s+1]
+        for s in 0..256 {
+            if self.cumsum[s+1] > r { return s; }
+        }
+        255
+    }
+}
+
+pub fn compress(data: &[u8]) -> Vec<u8> {
+    let freq = FreqTable::build(data);
+    let fb   = freq.serialize();
+    let mut hdr = Vec::new();
+    hdr.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    hdr.extend_from_slice(&fb);
+    if data.is_empty() { return hdr; }
+
+    let total = freq.total;
+    let mut x: u32 = total; // initial state = M (= total after normalization)
+    let mut stream: Vec<u8> = Vec::new();
+
+    for &sym in data.iter().rev() {
+        let s  = sym as usize;
+        let f  = freq.freq[s];
+        let cs = freq.cumsum[s];
+
+        // Renorm: bring x into [f, f*256) so after encode x < 256*total
+        // i.e., emit bytes while x >= f * 256
+        while x >= f * 256 {
+            stream.push((x & 0xFF) as u8);
+            x >>= 8;
+        }
+        // x is now in [0, f*256). Clamp to [f, f*256) -- x should already >= f
+        // if x < f that means initial state is wrong, but let's be safe:
+        // Actually for first symbol x=total >= f always since f <= total.
+
+        // Encode: new_x = (x / f) * total + (x % f) + cs
+        x = (x / f) * total + (x % f) + cs;
+    }
+
+    // Flush state
+    while x > 0 { stream.push((x & 0xFF) as u8); x >>= 8; }
+    stream.reverse();
+
+    let mut out = hdr;
+    out.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+    out.extend(stream);
+    out
+}
+
+pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 4 { return None; }
+    let orig  = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    if orig == 0 { return Some(vec![]); }
+    let (freq, fsz) = FreqTable::deserialize(&data[4..])?;
+    let rest  = &data[4+fsz..];
+    if rest.len() < 4 { return None; }
+    let slen  = u32::from_le_bytes(rest[0..4].try_into().ok()?) as usize;
+    let stream = &rest[4..4+slen.min(rest.len()-4)];
+
+    let total = freq.total;
+    let mut x: u32 = 0;
+    let mut pos = 0usize;
+
+    // Reconstruct state
+    while pos < stream.len() && x < total {
+        x = (x << 8) | stream[pos] as u32;
+        pos += 1;
+    }
+
+    let mut out = Vec::with_capacity(orig);
+
+    while out.len() < orig {
+        // Decode: x = (q)*total + r + cs  where r = x%total - cs, q = x/total
+        // So: sym = find(x % total), r = x%total - cs[sym], q = x/total
+        // prev_x was in [f, f*256): prev_x = q*f + r
+        let r   = x % total;
+        let s   = freq.find_sym(r);
+        let f   = freq.freq[s];
+        let cs  = freq.cumsum[s];
+        let q   = x / total;
+        let prev_x = q * f + (r - cs);
+        out.push(s as u8);
+        x = prev_x;
+
+        // Renorm: restore x to [total, 256*total) by reading bytes the encoder emitted
+        while x < total && pos < stream.len() {
+            x = (x << 8) | stream[pos] as u32;
+            pos += 1;
+        }
+    }
+
+    // Encoder processes data backwards so decoder naturally recovers forward order
+    if out.len() == orig { Some(out) } else { None }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn check(data: &[u8]) {
+        let c = compress(data);
+        let d = decompress(&c)
+            .unwrap_or_else(||panic!("None: {:?}",&data[..data.len().min(8)]));
+        if d!=data {
+            eprintln!("exp: {:?}",&data[..data.len().min(16)]);
+            eprintln!("got: {:?}",&d[..d.len().min(16)]);
+        }
+        assert_eq!(d,data);
+    }
+    #[test] fn test_empty()      { check(b""); }
+    #[test] fn test_single_sym() { check(b"aaaaaaaaaa"); }
+    #[test] fn test_two_syms()   { check(b"ababababab"); }
+    #[test] fn test_simple() {
+        let d = b"hello world hello world hello world";
+        check(d);
+        let c=compress(d);
+        println!("simple: {}->{}  {:.2}x",d.len(),c.len(),d.len() as f64/c.len() as f64);
+    }
+    #[test] fn test_all_bytes()  { check(&(0u8..=255).collect::<Vec<_>>()); }
+    #[test] fn test_real_text() {
+        let d = b"the quick brown fox jumps over the lazy dog                   the quick brown fox jumps over the lazy dog";
+        check(d);
+        let c=compress(d);
+        println!("text: {}->{}  {:.2}x",d.len(),c.len(),d.len() as f64/c.len() as f64);
+    }
+    #[test] fn test_larger() {
+        let d: Vec<u8> = b"hello world ".iter().cycle().take(1000).copied().collect();
+        check(&d);
+        let c=compress(&d);
+        println!("1KB: {}->{}  {:.2}x",d.len(),c.len(),d.len() as f64/c.len() as f64);
+    }
+}

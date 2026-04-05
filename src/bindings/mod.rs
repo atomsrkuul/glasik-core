@@ -100,6 +100,21 @@ impl GlasikSliding {
     }
 }
 
+
+#[pyfunction]
+fn gn_ans_compress(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    let compressed = crate::codec::ans::compress(data);
+    Ok(PyBytes::new(py, &compressed).into())
+}
+
+#[pyfunction]
+fn gn_ans_decompress(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    match crate::codec::ans::decompress(data) {
+        Some(d) => Ok(PyBytes::new(py, &d).into()),
+        None    => Err(pyo3::exceptions::PyValueError::new_err("ANS decompress failed")),
+    }
+}
+
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
@@ -108,6 +123,8 @@ fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress_batch, m)?)?;
     m.add_function(wrap_pyfunction!(gn_compress_batch_stats, m)?)?;
     m.add_class::<GlasikSliding>()?;
+    m.add_function(wrap_pyfunction!(gn_ans_compress, m)?)? ;
+    m.add_function(wrap_pyfunction!(gn_ans_decompress, m)?)? ;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

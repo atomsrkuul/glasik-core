@@ -76,6 +76,9 @@ pub fn preseed(category: &Category) -> Vec<DictEntry> {
             b"\"name\":",
         ],
         Category::Text => &[
+            b"    ",    // 4-space indent
+            b"        ", // 8-space indent
+            b"\n\n",   // double newline
             b" the ",
             b" and ",
             b" of ",
