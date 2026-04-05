@@ -151,7 +151,9 @@ fn apply_pass2(
                     } else {
                         // Offset the id
                         out.push(ESCAPE);
-                        out.push(id + pass1_count as u8);
+                        let offset_id = id as u16 + pass1_count as u16;
+                        debug_assert!(offset_id <= 255, "token ID overflow: {id} + {pass1_count}");
+                        out.push(offset_id as u8);
                     }
                     j += 2;
                 } else {

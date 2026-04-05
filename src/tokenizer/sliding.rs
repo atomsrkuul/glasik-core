@@ -132,12 +132,16 @@ impl SlidingTokenizer {
                 // Window full -- replace lowest-value stale entry if new is better
                 let new_value = entry.saving as u64;
                 if let Some(worst_idx) = self.worst_entry(new_value) {
+                    // Remove stale index entry before replacing
+                    let old_bytes = self.window[worst_idx].bytes.clone();
+                    index.remove(&old_bytes);
                     self.window[worst_idx] = WindowEntry {
                         bytes:           entry.bytes.clone(),
                         cumulative_freq: entry.freq as u64,
                         last_seen:       self.batch_count,
                         saving:          entry.saving as u64,
                     };
+                    index.insert(entry.bytes.clone(), worst_idx);
                 }
             }
         }
@@ -196,7 +200,11 @@ fn apply_pass2_sliding(
                     let id = encoded[j+1];
                     out.push(ESCAPE);
                     if id == 0x00 { out.push(0x00); }
-                    else { out.push(id + pass1_count as u8); }
+                    else {
+                        let offset_id = id as u16 + pass1_count as u16;
+                        debug_assert!(offset_id <= 255, "token ID overflow: {id} + {pass1_count}");
+                        out.push(offset_id as u8);
+                    }
                     j += 2;
                 } else { out.push(encoded[j]); j += 1; }
             }

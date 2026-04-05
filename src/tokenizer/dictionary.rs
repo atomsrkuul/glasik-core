@@ -33,24 +33,24 @@ fn scan_length(
     if buf.len() < len { return; }
     let mut base_pow: u64 = 1;
     for _ in 0..len {
-        base_pow = base_pow.wrapping_mul(BASE) % MOD;
+        base_pow = ((base_pow as u128 * BASE as u128) % MOD as u128) as u64;
     }
     let mut map: std::collections::HashMap<u64, (u32, usize)> =
         std::collections::HashMap::with_capacity(buf.len() / len + 1);
     let mut hash: u64 = 0;
     for i in 0..len {
-        hash = (hash.wrapping_mul(BASE) + buf[i] as u64) % MOD;
+        hash = ((hash as u128 * BASE as u128 + buf[i] as u128) % MOD as u128) as u64;
     }
     if buf[0] >= 0x20 || buf[0] == b'\n' {
         map.entry(hash).and_modify(|(c,_)| *c += 1).or_insert((1, 0));
     }
     for i in 1..=buf.len() - len {
-        hash = (
-            hash.wrapping_mul(BASE)
-                .wrapping_add(buf[i + len - 1] as u64)
-                .wrapping_add(MOD * 2)
-                .wrapping_sub(base_pow.wrapping_mul(buf[i - 1] as u64) % MOD)
-        ) % MOD;
+        let h = (hash as u128 * BASE as u128
+            + buf[i + len - 1] as u128
+            + MOD as u128 * 2
+            - (base_pow as u128 * buf[i - 1] as u128) % MOD as u128
+        ) % MOD as u128;
+        hash = h as u64;
         let b = buf[i];
         if b >= 0x20 || b == b'\n' || b == b'\r' {
             map.entry(hash)
