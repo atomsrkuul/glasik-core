@@ -85,8 +85,6 @@ impl Tokenizer {
 
         // Dry-run to find which entries fire, then prune and re-encode.
         // This removes unfired entries from the header without breaking IDs.
-        let dry_run   = codon_encode(buf, &pass1);
-        let pass1     = prune_to_fired(&pass1, &dry_run);
         let tokenized1 = codon_encode(buf, &pass1);
 
         // ── Pass 2: residual only ────────────────────────────────────────
