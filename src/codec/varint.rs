@@ -15,7 +15,7 @@ pub const MAX_VARINT_LEN: usize = 10;
 /// Use .as_slice() to get the encoded bytes.
 pub struct VarintBuf {
     data: [u8; MAX_VARINT_LEN],
-    len:  usize,
+    len: usize,
 }
 
 impl VarintBuf {
@@ -24,14 +24,19 @@ impl VarintBuf {
         &self.data[..self.len]
     }
     #[inline]
-    pub fn len(&self) -> usize { self.len }
+    pub fn len(&self) -> usize {
+        self.len
+    }
 }
 
 /// Encode a u64 into a stack-allocated VarintBuf. Zero allocation.
 /// Hot path -- called once per message field.
 #[inline]
 pub fn encode_stack(mut value: u64) -> VarintBuf {
-    let mut buf = VarintBuf { data: [0u8; MAX_VARINT_LEN], len: 0 };
+    let mut buf = VarintBuf {
+        data: [0u8; MAX_VARINT_LEN],
+        len: 0,
+    };
     loop {
         let byte = (value & 0x7F) as u8;
         value >>= 7;
@@ -61,7 +66,7 @@ pub fn encode(value: u64, out: &mut Vec<u8>) {
 pub fn decode(data: &[u8], pos: usize) -> Result<(u64, usize), String> {
     let mut value: u64 = 0;
     let mut shift: u32 = 0;
-    let mut cur   = pos;
+    let mut cur = pos;
     loop {
         if cur >= data.len() {
             return Err(format!("varint: unexpected end of data at pos {cur}"));
@@ -97,26 +102,38 @@ mod tests {
     }
 
     #[test]
-    fn test_zero()        { roundtrip(0); }
+    fn test_zero() {
+        roundtrip(0);
+    }
 
     #[test]
-    fn test_small()       { roundtrip(1); roundtrip(127); }
+    fn test_small() {
+        roundtrip(1);
+        roundtrip(127);
+    }
 
     #[test]
-    fn test_two_bytes()   { roundtrip(128); roundtrip(300); roundtrip(16383); }
+    fn test_two_bytes() {
+        roundtrip(128);
+        roundtrip(300);
+        roundtrip(16383);
+    }
 
     #[test]
-    fn test_large()       { roundtrip(u32::MAX as u64); roundtrip(u64::MAX); }
+    fn test_large() {
+        roundtrip(u32::MAX as u64);
+        roundtrip(u64::MAX);
+    }
 
     #[test]
     fn test_sequential() {
         let mut buf = Vec::new();
-        encode(1,   &mut buf);
+        encode(1, &mut buf);
         encode(300, &mut buf);
-        encode(0,   &mut buf);
+        encode(0, &mut buf);
         let (a, p1) = decode(&buf, 0).unwrap();
         let (b, p2) = decode(&buf, p1).unwrap();
-        let (c, _)  = decode(&buf, p2).unwrap();
+        let (c, _) = decode(&buf, p2).unwrap();
         assert_eq!((a, b, c), (1, 300, 0));
     }
 

@@ -10,18 +10,18 @@
 
 use crate::codec::crc::crc32;
 
-pub const MAGIC:           [u8; 4] = [0x47, 0x4E, 0x4C, 0x5A];
-pub const VERSION:         u8      = 2;
-pub const FLAG_COMPRESSION: u8     = 0x01;
-pub const HEADER_LEN:      usize   = 10; // magic+ver+flags+len
-pub const TRAILER_LEN:     usize   = 4;  // crc32
-pub const MIN_FRAME_LEN:   usize   = HEADER_LEN + TRAILER_LEN;
+pub const MAGIC: [u8; 4] = [0x47, 0x4E, 0x4C, 0x5A];
+pub const VERSION: u8 = 2;
+pub const FLAG_COMPRESSION: u8 = 0x01;
+pub const HEADER_LEN: usize = 10; // magic+ver+flags+len
+pub const TRAILER_LEN: usize = 4; // crc32
+pub const MIN_FRAME_LEN: usize = HEADER_LEN + TRAILER_LEN;
 
 /// Owned frame -- used when building frames for transmission.
 #[derive(Debug, PartialEq)]
 pub struct Frame {
     pub version: u8,
-    pub flags:   u8,
+    pub flags: u8,
     pub payload: Vec<u8>,
 }
 
@@ -31,8 +31,8 @@ pub struct Frame {
 #[derive(Debug, PartialEq)]
 pub struct FrameView<'a> {
     pub version: u8,
-    pub flags:   u8,
-    pub payload: &'a [u8],  // slice into original buffer
+    pub flags: u8,
+    pub payload: &'a [u8], // slice into original buffer
 }
 
 impl<'a> FrameView<'a> {
@@ -44,7 +44,7 @@ impl<'a> FrameView<'a> {
     pub fn to_owned(&self) -> Frame {
         Frame {
             version: self.version,
-            flags:   self.flags,
+            flags: self.flags,
             payload: self.payload.to_vec(),
         }
     }
@@ -54,7 +54,7 @@ impl Frame {
     pub fn new(payload: Vec<u8>, compressed: bool) -> Self {
         Frame {
             version: VERSION,
-            flags:   if compressed { FLAG_COMPRESSION } else { 0 },
+            flags: if compressed { FLAG_COMPRESSION } else { 0 },
             payload,
         }
     }
@@ -78,8 +78,10 @@ impl std::fmt::Display for FrameError {
             FrameError::InvalidMagic => write!(f, "invalid magic bytes"),
             FrameError::UnsupportedVersion(v) => write!(f, "unsupported version: {v}"),
             FrameError::Truncated => write!(f, "frame truncated"),
-            FrameError::CrcMismatch { stored, computed } =>
-                write!(f, "CRC32 mismatch: stored {stored:#010x} computed {computed:#010x}"),
+            FrameError::CrcMismatch { stored, computed } => write!(
+                f,
+                "CRC32 mismatch: stored {stored:#010x} computed {computed:#010x}"
+            ),
         }
     }
 }
@@ -100,22 +102,32 @@ pub fn encode(frame: &Frame) -> Vec<u8> {
 /// Decode bytes into a FrameView. Zero allocation -- payload is a
 /// slice into `data`. Verifies magic, version, and CRC32.
 pub fn decode_view(data: &[u8]) -> Result<FrameView<'_>, FrameError> {
-    if data.len() < MIN_FRAME_LEN { return Err(FrameError::Truncated); }
-    if data[0..4] != MAGIC        { return Err(FrameError::InvalidMagic); }
+    if data.len() < MIN_FRAME_LEN {
+        return Err(FrameError::Truncated);
+    }
+    if data[0..4] != MAGIC {
+        return Err(FrameError::InvalidMagic);
+    }
     let version = data[4];
-    if version != VERSION { return Err(FrameError::UnsupportedVersion(version)); }
+    if version != VERSION {
+        return Err(FrameError::UnsupportedVersion(version));
+    }
     let flags = data[5];
-    let len = u32::from_le_bytes(
-        data[6..10].try_into().map_err(|_| FrameError::Truncated)?
-    ) as usize;
+    let len =
+        u32::from_le_bytes(data[6..10].try_into().map_err(|_| FrameError::Truncated)?) as usize;
     let payload_end = HEADER_LEN + len;
-    if data.len() < payload_end + TRAILER_LEN { return Err(FrameError::Truncated); }
-    let stored   = u32::from_le_bytes(
+    if data.len() < payload_end + TRAILER_LEN {
+        return Err(FrameError::Truncated);
+    }
+    let stored = u32::from_le_bytes(
         data[payload_end..payload_end + TRAILER_LEN]
-            .try_into().map_err(|_| FrameError::Truncated)?
+            .try_into()
+            .map_err(|_| FrameError::Truncated)?,
     );
     let computed = crc32(&data[..payload_end]);
-    if stored != computed { return Err(FrameError::CrcMismatch { stored, computed }); }
+    if stored != computed {
+        return Err(FrameError::CrcMismatch { stored, computed });
+    }
     Ok(FrameView {
         version,
         flags,
@@ -135,7 +147,7 @@ mod tests {
     use super::*;
 
     fn roundtrip(payload: Vec<u8>, compressed: bool) {
-        let frame   = Frame::new(payload.clone(), compressed);
+        let frame = Frame::new(payload.clone(), compressed);
         let encoded = encode(&frame);
 
         // Zero-copy path
@@ -149,13 +161,19 @@ mod tests {
     }
 
     #[test]
-    fn test_roundtrip_uncompressed() { roundtrip(b"hello glasik".to_vec(), false); }
+    fn test_roundtrip_uncompressed() {
+        roundtrip(b"hello glasik".to_vec(), false);
+    }
 
     #[test]
-    fn test_roundtrip_compressed_flag() { roundtrip(b"compressed".to_vec(), true); }
+    fn test_roundtrip_compressed_flag() {
+        roundtrip(b"compressed".to_vec(), true);
+    }
 
     #[test]
-    fn test_empty_payload() { roundtrip(vec![], false); }
+    fn test_empty_payload() {
+        roundtrip(vec![], false);
+    }
 
     #[test]
     fn test_large_payload() {
@@ -175,7 +193,10 @@ mod tests {
         let mut enc = encode(&Frame::new(b"important".to_vec(), false));
         let last = enc.len();
         enc[last - 5] ^= 0xFF;
-        assert!(matches!(decode_view(&enc), Err(FrameError::CrcMismatch { .. })));
+        assert!(matches!(
+            decode_view(&enc),
+            Err(FrameError::CrcMismatch { .. })
+        ));
     }
 
     #[test]
@@ -189,19 +210,22 @@ mod tests {
         // FrameView payload is a slice into encoded -- same pointer
         let payload = b"zero copy test".to_vec();
         let encoded = encode(&Frame::new(payload.clone(), false));
-        let view    = decode_view(&encoded).unwrap();
+        let view = decode_view(&encoded).unwrap();
         // Verify the slice points into encoded, not a copy
-        let view_ptr    = view.payload.as_ptr();
+        let view_ptr = view.payload.as_ptr();
         let encoded_ptr = encoded[HEADER_LEN..].as_ptr();
-        assert_eq!(view_ptr, encoded_ptr, "payload should be a slice, not a copy");
+        assert_eq!(
+            view_ptr, encoded_ptr,
+            "payload should be a slice, not a copy"
+        );
     }
 
     #[test]
     fn test_promote_to_owned() {
         let payload = b"promote me".to_vec();
         let encoded = encode(&Frame::new(payload.clone(), true));
-        let view    = decode_view(&encoded).unwrap();
-        let owned   = view.to_owned();
+        let view = decode_view(&encoded).unwrap();
+        let owned = view.to_owned();
         assert_eq!(owned.payload, payload);
         assert!(owned.is_compressed());
     }

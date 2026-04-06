@@ -4,33 +4,33 @@
 //! Multi-pass: second dict built from non-token residual only.
 //! Pattern-agnostic: structure emerges from frequency data.
 
-pub const MIN_STR_LEN:  usize = 4;
-pub const MAX_STR_LEN:  usize = 128;
-pub const MIN_FREQ:     usize = 3;
-pub const MAX_ENTRIES:  usize = 200;
-pub const TOKEN_BYTES:  usize = 2;
-pub const MAX_LENGTHS:  usize = 24;
+pub const MIN_STR_LEN: usize = 4;
+pub const MAX_STR_LEN: usize = 128;
+pub const MIN_FREQ: usize = 3;
+pub const MAX_ENTRIES: usize = 200;
+pub const TOKEN_BYTES: usize = 2;
+pub const MAX_LENGTHS: usize = 24;
 
 const BASE: u64 = 131;
-const MOD:  u64 = (1 << 61) - 1;
+const MOD: u64 = (1 << 61) - 1;
 
 #[derive(Debug, Clone)]
 pub struct DictEntry {
-    pub bytes:  Vec<u8>,
-    pub freq:   usize,
+    pub bytes: Vec<u8>,
+    pub freq: usize,
     pub saving: usize,
 }
 
 impl DictEntry {
-    pub fn len(&self) -> usize { self.bytes.len() }
+    pub fn len(&self) -> usize {
+        self.bytes.len()
+    }
 }
 
-fn scan_length(
-    buf: &[u8],
-    len: usize,
-    out: &mut std::collections::HashMap<Vec<u8>, usize>,
-) {
-    if buf.len() < len { return; }
+fn scan_length(buf: &[u8], len: usize, out: &mut std::collections::HashMap<Vec<u8>, usize>) {
+    if buf.len() < len {
+        return;
+    }
     let mut base_pow: u64 = 1;
     for _ in 0..len {
         base_pow = ((base_pow as u128 * BASE as u128) % MOD as u128) as u64;
@@ -42,28 +42,34 @@ fn scan_length(
         hash = ((hash as u128 * BASE as u128 + buf[i] as u128) % MOD as u128) as u64;
     }
     if buf[0] >= 0x20 || buf[0] == b'\n' {
-        map.entry(hash).and_modify(|(c,_)| *c += 1).or_insert((1, 0));
+        map.entry(hash)
+            .and_modify(|(c, _)| *c += 1)
+            .or_insert((1, 0));
     }
     for i in 1..=buf.len() - len {
-        let h = (hash as u128 * BASE as u128
-            + buf[i + len - 1] as u128
-            + MOD as u128 * 2
-            - (base_pow as u128 * buf[i - 1] as u128) % MOD as u128
-        ) % MOD as u128;
+        let h = (hash as u128 * BASE as u128 + buf[i + len - 1] as u128 + MOD as u128 * 2
+            - (base_pow as u128 * buf[i - 1] as u128) % MOD as u128)
+            % MOD as u128;
         hash = h as u64;
         let b = buf[i];
         if b >= 0x20 || b == b'\n' || b == b'\r' {
             map.entry(hash)
-               .and_modify(|(c,_)| *c += 1)
-               .or_insert((1, i));
+                .and_modify(|(c, _)| *c += 1)
+                .or_insert((1, i));
         }
     }
     for (_, (count, pos)) in map {
-        if (count as usize) < MIN_FREQ { continue; }
-        if pos + len > buf.len() { continue; }
+        if (count as usize) < MIN_FREQ {
+            continue;
+        }
+        if pos + len > buf.len() {
+            continue;
+        }
         let bytes = buf[pos..pos + len].to_vec();
         let e = out.entry(bytes).or_insert(0);
-        if count as usize > *e { *e = count as usize; }
+        if count as usize > *e {
+            *e = count as usize;
+        }
     }
 }
 
@@ -78,9 +84,11 @@ fn length_weights(max_len: usize) -> Vec<(usize, f64)> {
     WEIGHTS.with(|w| {
         let w = w.borrow();
         let max_len = MAX_STR_LEN.min(max_len);
-        if max_len < MIN_STR_LEN { return vec![]; }
+        if max_len < MIN_STR_LEN {
+            return vec![];
+        }
         let range = max_len - MIN_STR_LEN;
-        let step  = (range / MAX_LENGTHS).max(1);
+        let step = (range / MAX_LENGTHS).max(1);
         let mut lengths = Vec::new();
         let mut len = MIN_STR_LEN;
         while len <= max_len {
@@ -103,7 +111,9 @@ fn update_weights(savings_per_len: &std::collections::HashMap<usize, usize>) {
     WEIGHTS.with(|w| {
         let mut w = w.borrow_mut();
         let total: usize = savings_per_len.values().sum();
-        if total == 0 { return; }
+        if total == 0 {
+            return;
+        }
         for (&len, &saving) in savings_per_len {
             let ratio = saving as f64 / total as f64;
             // Exponential moving average: 80% old, 20% new observation
@@ -115,8 +125,10 @@ fn update_weights(savings_per_len: &std::collections::HashMap<usize, usize>) {
 
 fn build_frequency_map(buf: &[u8]) -> std::collections::HashMap<Vec<u8>, usize> {
     let mut freq = std::collections::HashMap::new();
-    let max_len  = MAX_STR_LEN.min(buf.len() / 2);
-    if max_len < MIN_STR_LEN { return freq; }
+    let max_len = MAX_STR_LEN.min(buf.len() / 2);
+    if max_len < MIN_STR_LEN {
+        return freq;
+    }
 
     let lengths = length_weights(max_len);
     let mut savings_per_len: std::collections::HashMap<usize, usize> =
@@ -125,7 +137,7 @@ fn build_frequency_map(buf: &[u8]) -> std::collections::HashMap<Vec<u8>, usize> 
     for (len, _weight) in &lengths {
         let before = freq.values().map(|&v: &usize| v).sum::<usize>();
         scan_length(buf, *len, &mut freq);
-        let after  = freq.values().sum::<usize>();
+        let after = freq.values().sum::<usize>();
         savings_per_len.insert(*len, after.saturating_sub(before));
     }
 
@@ -138,16 +150,26 @@ fn select_entries(freq: std::collections::HashMap<Vec<u8>, usize>) -> Vec<DictEn
     let mut candidates: Vec<DictEntry> = freq
         .into_iter()
         .filter_map(|(bytes, count)| {
-            if count < MIN_FREQ || bytes.len() <= TOKEN_BYTES { return None; }
+            if count < MIN_FREQ || bytes.len() <= TOKEN_BYTES {
+                return None;
+            }
             let saving = (bytes.len() - TOKEN_BYTES) * count;
-            if saving == 0 { return None; }
-            Some(DictEntry { bytes, freq: count, saving })
+            if saving == 0 {
+                return None;
+            }
+            Some(DictEntry {
+                bytes,
+                freq: count,
+                saving,
+            })
         })
         .collect();
     candidates.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
     let mut selected: Vec<DictEntry> = Vec::new();
     'outer: for c in candidates {
-        if selected.len() >= MAX_ENTRIES { break; }
+        if selected.len() >= MAX_ENTRIES {
+            break;
+        }
         for e in &selected {
             if e.bytes.windows(c.len()).any(|w| w == c.bytes.as_slice()) {
                 continue 'outer;
@@ -159,7 +181,9 @@ fn select_entries(freq: std::collections::HashMap<Vec<u8>, usize>) -> Vec<DictEn
 }
 
 pub fn build(buf: &[u8]) -> Vec<DictEntry> {
-    if buf.is_empty() { return vec![]; }
+    if buf.is_empty() {
+        return vec![];
+    }
     select_entries(build_frequency_map(buf))
 }
 
@@ -184,9 +208,13 @@ pub fn extract_residual(tokenized: &[u8]) -> Vec<u8> {
 /// Build a second-pass dictionary from residual (non-token) bytes.
 /// IDs start at pass1_count + 1 to avoid collision with first dict.
 pub fn build_second_pass(residual: &[u8], pass1_count: usize) -> Vec<DictEntry> {
-    if residual.is_empty() { return vec![]; }
+    if residual.is_empty() {
+        return vec![];
+    }
     let remaining_slots = MAX_ENTRIES.saturating_sub(pass1_count);
-    if remaining_slots == 0 { return vec![]; }
+    if remaining_slots == 0 {
+        return vec![];
+    }
     let mut entries = select_entries(build_frequency_map(residual));
     entries.truncate(remaining_slots);
     entries
@@ -203,15 +231,26 @@ pub fn serialize(entries: &[DictEntry]) -> Vec<u8> {
 }
 
 pub fn deserialize(data: &[u8]) -> Result<(Vec<DictEntry>, usize), String> {
-    if data.len() < 2 { return Err("dictionary: truncated header".into()); }
+    if data.len() < 2 {
+        return Err("dictionary: truncated header".into());
+    }
     let count = u16::from_le_bytes([data[0], data[1]]) as usize;
     let mut pos = 2;
     let mut entries = Vec::with_capacity(count);
     for i in 0..count {
-        if pos >= data.len() { return Err(format!("dictionary: truncated at entry {i}")); }
-        let len = data[pos] as usize; pos += 1;
-        if pos + len > data.len() { return Err(format!("dictionary: entry {i} truncated")); }
-        entries.push(DictEntry { bytes: data[pos..pos+len].to_vec(), freq: 0, saving: 0 });
+        if pos >= data.len() {
+            return Err(format!("dictionary: truncated at entry {i}"));
+        }
+        let len = data[pos] as usize;
+        pos += 1;
+        if pos + len > data.len() {
+            return Err(format!("dictionary: entry {i} truncated"));
+        }
+        entries.push(DictEntry {
+            bytes: data[pos..pos + len].to_vec(),
+            freq: 0,
+            saving: 0,
+        });
         pos += len;
     }
     Ok((entries, pos))
@@ -220,7 +259,9 @@ pub fn deserialize(data: &[u8]) -> Result<(Vec<DictEntry>, usize), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn rep(s: &str, n: usize) -> Vec<u8> { s.repeat(n).into_bytes() }
+    fn rep(s: &str, n: usize) -> Vec<u8> {
+        s.repeat(n).into_bytes()
+    }
 
     #[test]
     fn test_build_finds_repeated_substring() {
@@ -230,11 +271,16 @@ mod tests {
         assert!(dict[0].freq >= MIN_FREQ);
     }
     #[test]
-    fn test_build_empty() { assert!(build(&[]).is_empty()); }
+    fn test_build_empty() {
+        assert!(build(&[]).is_empty());
+    }
     #[test]
     fn test_build_no_repeats() {
-        let _ = build(&(0u8..100)
-            .map(|i| i.wrapping_mul(7).wrapping_add(3)).collect::<Vec<_>>());
+        let _ = build(
+            &(0u8..100)
+                .map(|i| i.wrapping_mul(7).wrapping_add(3))
+                .collect::<Vec<_>>(),
+        );
     }
     #[test]
     fn test_serialize_deserialize() {
@@ -280,7 +326,7 @@ mod tests {
         assert!(!pass1.is_empty());
         // Apply first pass
         let tokenized = crate::tokenizer::codon::encode(&corpus, &pass1);
-        let residual  = extract_residual(&tokenized);
+        let residual = extract_residual(&tokenized);
         // Residual should be smaller than original
         assert!(residual.len() < corpus.len());
         let pass2 = build_second_pass(&residual, pass1.len());

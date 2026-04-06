@@ -27,7 +27,9 @@ impl FirstByteIndex {
     fn build(entries: &[DictEntry]) -> Self {
         let mut buckets: Vec<Vec<(Vec<u8>, u8)>> = vec![Vec::new(); 256];
         for (id, entry) in entries.iter().enumerate() {
-            if entry.bytes.is_empty() { continue; }
+            if entry.bytes.is_empty() {
+                continue;
+            }
             let first = entry.bytes[0] as usize;
             // id+1 because 0 is reserved for escaped literal ESCAPE byte
             buckets[first].push((entry.bytes.clone(), (id + 1) as u8));
@@ -46,7 +48,9 @@ impl FirstByteIndex {
 
         for bucket in &self.buckets {
             for (pattern, token_id) in bucket {
-                if pattern.is_empty() || pattern.len() > buf.len() { continue; }
+                if pattern.is_empty() || pattern.len() > buf.len() {
+                    continue;
+                }
                 // Use windows() to find all occurrences -- native Rust,
                 // compiler can vectorize this
                 let mut start = 0;
@@ -68,9 +72,7 @@ impl FirstByteIndex {
         }
 
         // Sort by position, break ties longest-match first
-        matches.sort_unstable_by(|a, b| {
-            a.0.cmp(&b.0).then(b.2.cmp(&a.2))
-        });
+        matches.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.2.cmp(&a.2)));
         matches
     }
 }
@@ -82,7 +84,7 @@ pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
         return escape_only(buf);
     }
 
-    let index   = FirstByteIndex::build(entries);
+    let index = FirstByteIndex::build(entries);
     let matches = index.find_matches(buf);
 
     if matches.is_empty() {
@@ -92,33 +94,43 @@ pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
     // Greedy left-to-right assembly
     let mut out = Vec::with_capacity(buf.len());
     let mut pos = 0usize;
-    let mut mi  = 0usize;
+    let mut mi = 0usize;
 
     while pos < buf.len() {
         // Advance past stale matches
-        while mi < matches.len() && matches[mi].0 < pos { mi += 1; }
+        while mi < matches.len() && matches[mi].0 < pos {
+            mi += 1;
+        }
 
         if mi < matches.len() && matches[mi].0 == pos {
             let (_, token_id, match_len) = matches[mi];
             out.push(ESCAPE);
             out.push(token_id);
             pos += match_len;
-            mi  += 1;
+            mi += 1;
         } else {
             // Copy bytes up to next match, escaping any literal ESCAPE bytes
-            let next_match = if mi < matches.len() { matches[mi].0 } else { buf.len() };
+            let next_match = if mi < matches.len() {
+                matches[mi].0
+            } else {
+                buf.len()
+            };
             let end = next_match.min(buf.len());
             let mut j = pos;
             while j < end {
                 if buf[j] == ESCAPE {
-                    if j > pos { out.extend_from_slice(&buf[pos..j]); }
+                    if j > pos {
+                        out.extend_from_slice(&buf[pos..j]);
+                    }
                     out.push(ESCAPE);
                     out.push(0x00);
                     pos = j + 1;
                 }
                 j += 1;
             }
-            if pos < end { out.extend_from_slice(&buf[pos..end]); }
+            if pos < end {
+                out.extend_from_slice(&buf[pos..end]);
+            }
             pos = end;
         }
     }
@@ -128,13 +140,13 @@ pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
 /// Decode: reverse codon substitution using dictionary entries.
 pub fn decode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
     let mut out = Vec::with_capacity(buf.len() * 2);
-    let mut i   = 0usize;
+    let mut i = 0usize;
 
     while i < buf.len() {
         if buf[i] == ESCAPE && i + 1 < buf.len() {
             let id = buf[i + 1];
             if id == 0x00 {
-                out.push(ESCAPE);  // literal escape byte
+                out.push(ESCAPE); // literal escape byte
             } else {
                 let idx = (id as usize).saturating_sub(1);
                 if idx < entries.len() {
@@ -174,7 +186,11 @@ mod tests {
     use crate::tokenizer::dictionary::{self, DictEntry};
 
     fn entry(s: &str) -> DictEntry {
-        DictEntry { bytes: s.as_bytes().to_vec(), freq: 10, saving: 100 }
+        DictEntry {
+            bytes: s.as_bytes().to_vec(),
+            freq: 10,
+            saving: 100,
+        }
     }
 
     #[test]
@@ -212,9 +228,13 @@ mod tests {
         // Build dict from corpus, encode, decode, verify lossless
         let corpus = b"the quick brown fox jumps over the lazy dog \
                         the quick brown fox jumps over the lazy dog \
-                        the quick brown fox jumps over the lazy dog".to_vec();
+                        the quick brown fox jumps over the lazy dog"
+            .to_vec();
         let entries = dictionary::build(&corpus);
-        assert!(!entries.is_empty(), "should build dictionary from repetitive corpus");
+        assert!(
+            !entries.is_empty(),
+            "should build dictionary from repetitive corpus"
+        );
         let enc = encode(&corpus, &entries);
         let dec = decode(&enc, &entries);
         assert_eq!(dec, corpus, "full pipeline roundtrip failed");
@@ -235,11 +255,7 @@ mod tests {
     #[test]
     fn test_token_collision_safety() {
         // Entries with overlapping content must not corrupt data
-        let entries = vec![
-            entry("hello world"),
-            entry("hello"),
-            entry("world"),
-        ];
+        let entries = vec![entry("hello world"), entry("hello"), entry("world")];
         let buf = b"hello world hello world".to_vec();
         let enc = encode(&buf, &entries);
         let dec = decode(&enc, &entries);

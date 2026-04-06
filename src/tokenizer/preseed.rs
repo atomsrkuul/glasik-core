@@ -25,14 +25,23 @@ pub enum Category {
 /// O(1) heuristic -- no full scan needed.
 pub fn detect(buf: &[u8]) -> Category {
     let sample = &buf[..buf.len().min(256)];
-    let trimmed = sample.iter().position(|&b| b > 0x20)
+    let trimmed = sample
+        .iter()
+        .position(|&b| b > 0x20)
         .map(|i| &sample[i..])
         .unwrap_or(sample);
 
     // Log first -- [ERROR] starts with [ which would fool JSON check
     let log_markers: &[&[u8]] = &[
-        b"[ERROR]", b"[WARN]", b"[INFO]", b"[DEBUG]", b"Exception:", b"Error:",
-        b"FATAL", b"stack trace", b"Traceback",
+        b"[ERROR]",
+        b"[WARN]",
+        b"[INFO]",
+        b"[DEBUG]",
+        b"Exception:",
+        b"Error:",
+        b"FATAL",
+        b"stack trace",
+        b"Traceback",
     ];
     for marker in log_markers {
         if sample.windows(marker.len()).any(|w| w == *marker) {
@@ -60,9 +69,9 @@ pub fn detect(buf: &[u8]) -> Category {
 pub fn preseed(category: &Category) -> Vec<DictEntry> {
     let patterns: &[&[u8]] = match category {
         Category::Json => &[
-            b"{\"",        // {"
-            b"\":\"",    // ":"
-            b"\",\"",   // ","
+            b"{\"",   // {"
+            b"\":\"", // ":"
+            b"\",\"", // ","
             b":null",
             b":true",
             b":false",
@@ -76,9 +85,9 @@ pub fn preseed(category: &Category) -> Vec<DictEntry> {
             b"\"name\":",
         ],
         Category::Text => &[
-            b"    ",    // 4-space indent
+            b"    ",     // 4-space indent
             b"        ", // 8-space indent
-            b"\n\n",   // double newline
+            b"\n\n",     // double newline
             b" the ",
             b" and ",
             b" of ",
@@ -122,25 +131,23 @@ pub fn preseed(category: &Category) -> Vec<DictEntry> {
             b"caused by",
             b"stack trace",
         ],
-        Category::Mixed => &[
-            b" the ",
-            b" and ",
-            b":null",
-            b":true",
-            b":false",
-            b"\":\"",
-        ],
+        Category::Mixed => &[b" the ", b" and ", b":null", b":true", b":false", b"\":\""],
     };
 
-    patterns.iter().filter_map(|p| {
-        if p.len() <= 2 { return None; } // too short to save
-        let saving = (p.len() - 2) * 50; // artificial high freq
-        Some(DictEntry {
-            bytes:  p.to_vec(),
-            freq:   50,  // artificial -- survives selection
-            saving,
+    patterns
+        .iter()
+        .filter_map(|p| {
+            if p.len() <= 2 {
+                return None;
+            } // too short to save
+            let saving = (p.len() - 2) * 50; // artificial high freq
+            Some(DictEntry {
+                bytes: p.to_vec(),
+                freq: 50, // artificial -- survives selection
+                saving,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 #[cfg(test)]
@@ -161,7 +168,10 @@ mod tests {
 
     #[test]
     fn test_detect_text() {
-        assert_eq!(detect(b"the quick brown fox jumps over the lazy dog"), Category::Text);
+        assert_eq!(
+            detect(b"the quick brown fox jumps over the lazy dog"),
+            Category::Text
+        );
     }
 
     #[test]
@@ -173,7 +183,12 @@ mod tests {
 
     #[test]
     fn test_preseed_entries_valid() {
-        for cat in [Category::Json, Category::Text, Category::Log, Category::Mixed] {
+        for cat in [
+            Category::Json,
+            Category::Text,
+            Category::Log,
+            Category::Mixed,
+        ] {
             for entry in preseed(&cat) {
                 assert!(entry.bytes.len() > 2, "entry too short: {:?}", entry.bytes);
                 assert!(entry.saving > 0);
@@ -183,12 +198,17 @@ mod tests {
 
     #[test]
     fn test_roundtrip_with_preseed() {
-        use crate::tokenizer::codon::{encode, decode};
+        use crate::tokenizer::codon::{decode, encode};
         let entries = preseed(&Category::Text);
         let buf = b"the quick brown fox and the lazy dog and the cat".to_vec();
         let enc = encode(&buf, &entries);
         let dec = decode(&enc, &entries);
         assert_eq!(dec, buf, "roundtrip failed");
-        assert!(enc.len() < buf.len(), "should compress: {} -> {}", buf.len(), enc.len());
+        assert!(
+            enc.len() < buf.len(),
+            "should compress: {} -> {}",
+            buf.len(),
+            enc.len()
+        );
     }
 }

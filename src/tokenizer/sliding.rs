@@ -13,34 +13,37 @@
 //! This is how we beat gzip: gzip resets per stream.
 //! We accumulate domain vocabulary indefinitely.
 
-use std::collections::HashMap;
+use crate::tokenizer::codon::{decode as codon_decode, encode as codon_encode};
 use crate::tokenizer::dictionary::DictEntry;
 use crate::tokenizer::dictionary::{build, build_second_pass, extract_residual};
-use crate::tokenizer::codon::{encode as codon_encode, decode as codon_decode};
+use crate::tokenizer::dictionary::{deserialize, serialize};
 use crate::tokenizer::TOK_MAGIC;
-use crate::tokenizer::dictionary::{serialize, deserialize};
+use std::collections::HashMap;
 
 pub const MAX_WINDOW_ENTRIES: usize = 200;
-pub const EVICTION_AGE:       u64   = 50;  // evict if not seen in N batches
+pub const EVICTION_AGE: u64 = 50; // evict if not seen in N batches
 
 #[derive(Debug, Clone)]
 struct WindowEntry {
-    bytes:          Vec<u8>,
+    bytes: Vec<u8>,
     cumulative_freq: u64,
-    last_seen:      u64,   // batch number
-    saving:         u64,
+    last_seen: u64, // batch number
+    saving: u64,
 }
 
 /// Sliding window codon table.
 /// Create once, compress many batches through it.
 pub struct SlidingTokenizer {
-    window:      Vec<WindowEntry>,
+    window: Vec<WindowEntry>,
     batch_count: u64,
 }
 
 impl SlidingTokenizer {
     pub fn new() -> Self {
-        SlidingTokenizer { window: Vec::new(), batch_count: 0 }
+        SlidingTokenizer {
+            window: Vec::new(),
+            batch_count: 0,
+        }
     }
 
     /// Compress a buffer using accumulated window knowledge.
@@ -62,8 +65,8 @@ impl SlidingTokenizer {
 
         // Two-pass encode
         let tokenized1 = codon_encode(buf, &active);
-        let residual   = extract_residual(&tokenized1);
-        let pass2      = build_second_pass(&residual, active.len());
+        let residual = extract_residual(&tokenized1);
+        let pass2 = build_second_pass(&residual, active.len());
         let tokenized2 = if pass2.is_empty() {
             tokenized1
         } else {
@@ -85,18 +88,26 @@ impl SlidingTokenizer {
 
     /// Decode is stateless -- dictionary is in the frame header.
     pub fn decode(buf: &[u8]) -> Result<Vec<u8>, String> {
-        if buf.len() < 4 { return Err("sliding: too short".into()); }
-        if buf[0..4] != TOK_MAGIC { return Ok(buf.to_vec()); }
-        let (entries, dict_end) = deserialize(&buf[4..])
-            .map_err(|e| format!("sliding: {e}"))?;
+        if buf.len() < 4 {
+            return Err("sliding: too short".into());
+        }
+        if buf[0..4] != TOK_MAGIC {
+            return Ok(buf.to_vec());
+        }
+        let (entries, dict_end) = deserialize(&buf[4..]).map_err(|e| format!("sliding: {e}"))?;
         let header_end = 4 + dict_end;
-        if header_end + 4 > buf.len() { return Err("sliding: truncated".into()); }
-        let orig_len = u32::from_le_bytes(
-            buf[header_end..header_end+4].try_into().unwrap()
-        ) as usize;
-        let decoded = codon_decode(&buf[header_end+4..], &entries);
+        if header_end + 4 > buf.len() {
+            return Err("sliding: truncated".into());
+        }
+        let orig_len =
+            u32::from_le_bytes(buf[header_end..header_end + 4].try_into().unwrap()) as usize;
+        let decoded = codon_decode(&buf[header_end + 4..], &entries);
         if decoded.len() != orig_len {
-            return Err(format!("sliding: len mismatch {} vs {}", decoded.len(), orig_len));
+            return Err(format!(
+                "sliding: len mismatch {} vs {}",
+                decoded.len(),
+                orig_len
+            ));
         }
         Ok(decoded)
     }
@@ -109,7 +120,10 @@ impl SlidingTokenizer {
     // ── Private ────────────────────────────────────────────────────────
 
     fn update_window(&mut self, batch: &[DictEntry]) {
-        let mut index: HashMap<Vec<u8>, usize> = self.window.iter().enumerate()
+        let mut index: HashMap<Vec<u8>, usize> = self
+            .window
+            .iter()
+            .enumerate()
             .map(|(i, e)| (e.bytes.clone(), i))
             .collect();
 
@@ -117,15 +131,15 @@ impl SlidingTokenizer {
             if let Some(&idx) = index.get(&entry.bytes) {
                 // Update existing
                 self.window[idx].cumulative_freq += entry.freq as u64;
-                self.window[idx].last_seen        = self.batch_count;
-                self.window[idx].saving           += entry.saving as u64;
+                self.window[idx].last_seen = self.batch_count;
+                self.window[idx].saving += entry.saving as u64;
             } else if self.window.len() < MAX_WINDOW_ENTRIES {
                 // Add new entry
                 self.window.push(WindowEntry {
-                    bytes:           entry.bytes.clone(),
+                    bytes: entry.bytes.clone(),
                     cumulative_freq: entry.freq as u64,
-                    last_seen:       self.batch_count,
-                    saving:          entry.saving as u64,
+                    last_seen: self.batch_count,
+                    saving: entry.saving as u64,
                 });
                 index.insert(entry.bytes.clone(), self.window.len() - 1);
             } else {
@@ -136,10 +150,10 @@ impl SlidingTokenizer {
                     let old_bytes = self.window[worst_idx].bytes.clone();
                     index.remove(&old_bytes);
                     self.window[worst_idx] = WindowEntry {
-                        bytes:           entry.bytes.clone(),
+                        bytes: entry.bytes.clone(),
                         cumulative_freq: entry.freq as u64,
-                        last_seen:       self.batch_count,
-                        saving:          entry.saving as u64,
+                        last_seen: self.batch_count,
+                        saving: entry.saving as u64,
                     };
                     index.insert(entry.bytes.clone(), worst_idx);
                 }
@@ -155,7 +169,9 @@ impl SlidingTokenizer {
     }
 
     fn worst_entry(&self, min_value: u64) -> Option<usize> {
-        self.window.iter().enumerate()
+        self.window
+            .iter()
+            .enumerate()
             .filter(|(_, e)| {
                 let age = self.batch_count.saturating_sub(e.last_seen);
                 e.saving < min_value && age > 5
@@ -167,46 +183,55 @@ impl SlidingTokenizer {
     fn active_entries(&self) -> Vec<DictEntry> {
         let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
         entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
-        entries.iter().map(|e| DictEntry {
-            bytes:  e.bytes.clone(),
-            freq:   e.cumulative_freq as usize,
-            saving: e.saving as usize,
-        }).collect()
+        entries
+            .iter()
+            .map(|e| DictEntry {
+                bytes: e.bytes.clone(),
+                freq: e.cumulative_freq as usize,
+                saving: e.saving as usize,
+            })
+            .collect()
     }
 }
 
 impl Default for SlidingTokenizer {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-fn apply_pass2_sliding(
-    buf: &[u8],
-    pass2: &[DictEntry],
-    pass1_count: usize,
-) -> Vec<u8> {
+fn apply_pass2_sliding(buf: &[u8], pass2: &[DictEntry], pass1_count: usize) -> Vec<u8> {
     use crate::tokenizer::codon::ESCAPE;
     let mut out = Vec::with_capacity(buf.len());
-    let mut i   = 0usize;
+    let mut i = 0usize;
     while i < buf.len() {
         if buf[i] == ESCAPE && i + 1 < buf.len() {
-            out.push(buf[i]); out.push(buf[i+1]); i += 2;
+            out.push(buf[i]);
+            out.push(buf[i + 1]);
+            i += 2;
         } else {
             let start = i;
-            while i < buf.len() && !(buf[i] == ESCAPE && i+1 < buf.len()) { i += 1; }
+            while i < buf.len() && !(buf[i] == ESCAPE && i + 1 < buf.len()) {
+                i += 1;
+            }
             let encoded = codon_encode(&buf[start..i], pass2);
             let mut j = 0;
             while j < encoded.len() {
-                if encoded[j] == ESCAPE && j+1 < encoded.len() {
-                    let id = encoded[j+1];
+                if encoded[j] == ESCAPE && j + 1 < encoded.len() {
+                    let id = encoded[j + 1];
                     out.push(ESCAPE);
-                    if id == 0x00 { out.push(0x00); }
-                    else {
+                    if id == 0x00 {
+                        out.push(0x00);
+                    } else {
                         let offset_id = id as u16 + pass1_count as u16;
                         debug_assert!(offset_id <= 255, "token ID overflow: {id} + {pass1_count}");
                         out.push(offset_id as u8);
                     }
                     j += 2;
-                } else { out.push(encoded[j]); j += 1; }
+                } else {
+                    out.push(encoded[j]);
+                    j += 1;
+                }
             }
         }
     }

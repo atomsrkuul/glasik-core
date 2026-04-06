@@ -7,16 +7,16 @@
 //! Mode selection: if codon-only output < deflate output, use codon-only.
 //! The pipeline measures both and picks the winner.
 
-use flate2::{write::DeflateEncoder, read::DeflateDecoder, Compression};
-use std::io::{Read, Write};
 use crate::codec::frame::{self, Frame, FrameError};
-use crate::tokenizer::{Tokenizer, TOK_MAGIC};
-use crate::tokenizer::dictionary;
 use crate::tokenizer::codon;
+use crate::tokenizer::dictionary;
+use crate::tokenizer::{Tokenizer, TOK_MAGIC};
+use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
+use std::io::{Read, Write};
 
 // Flag byte in GN frame flags field
 pub const FLAG_COMPRESSION: u8 = 0x01;
-pub const FLAG_CODON_ONLY:  u8 = 0x02; // codon table, no deflate
+pub const FLAG_CODON_ONLY: u8 = 0x02; // codon table, no deflate
 
 #[derive(Debug)]
 pub enum PipelineError {
@@ -28,36 +28,40 @@ pub enum PipelineError {
 impl std::fmt::Display for PipelineError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            PipelineError::Frame(e)     => write!(f, "frame: {e}"),
-            PipelineError::Inflate(e)   => write!(f, "inflate: {e}"),
+            PipelineError::Frame(e) => write!(f, "frame: {e}"),
+            PipelineError::Inflate(e) => write!(f, "inflate: {e}"),
             PipelineError::Tokenizer(e) => write!(f, "tokenizer: {e}"),
         }
     }
 }
 
 impl From<FrameError> for PipelineError {
-    fn from(e: FrameError) -> Self { PipelineError::Frame(e) }
+    fn from(e: FrameError) -> Self {
+        PipelineError::Frame(e)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Mode {
-    Auto,       // measure both, pick winner
-    CodonOnly,  // no deflate
-    Deflate,    // codon + deflate always
+    Auto,      // measure both, pick winner
+    CodonOnly, // no deflate
+    Deflate,   // codon + deflate always
 }
 
 #[derive(Debug)]
 pub struct PipelineStats {
-    pub input_bytes:      usize,
-    pub tokenized_bytes:  usize,
+    pub input_bytes: usize,
+    pub tokenized_bytes: usize,
     pub compressed_bytes: usize,
-    pub framed_bytes:     usize,
-    pub mode_used:        &'static str,
+    pub framed_bytes: usize,
+    pub mode_used: &'static str,
 }
 
 impl PipelineStats {
     pub fn ratio(&self) -> f64 {
-        if self.framed_bytes == 0 { return 1.0; }
+        if self.framed_bytes == 0 {
+            return 1.0;
+        }
         self.input_bytes as f64 / self.framed_bytes as f64
     }
 }
@@ -114,10 +118,10 @@ pub fn compress_mode(data: &[u8], mode: &Mode) -> (Vec<u8>, &'static str) {
 
     match mode {
         Mode::CodonOnly => (frame_codon_only(tokenized), "codon"),
-        Mode::Deflate   => (frame_deflate(tokenized), "deflate"),
+        Mode::Deflate => (frame_deflate(tokenized), "deflate"),
         Mode::Auto => {
             // Try both, pick smaller
-            let codon_frame   = frame_codon_only(tokenized.clone());
+            let codon_frame = frame_codon_only(tokenized.clone());
             let deflate_frame = frame_deflate(tokenized);
             if codon_frame.len() <= deflate_frame.len() {
                 (codon_frame, "codon")
@@ -137,14 +141,16 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, PipelineError> {
         view.payload.to_vec()
     };
 
-    Tokenizer::new().decode(&payload).map_err(PipelineError::Tokenizer)
+    Tokenizer::new()
+        .decode(&payload)
+        .map_err(PipelineError::Tokenizer)
 }
 
 pub fn compress_with_stats(data: &[u8]) -> (Vec<u8>, PipelineStats) {
     let tokenized = tokenize_buf(data);
-    let tok_len   = tokenized.len();
+    let tok_len = tokenized.len();
 
-    let codon_frame   = frame_codon_only(tokenized.clone());
+    let codon_frame = frame_codon_only(tokenized.clone());
     let deflate_frame = frame_deflate(tokenized);
 
     let (framed, mode_used) = if codon_frame.len() <= deflate_frame.len() {
@@ -153,13 +159,16 @@ pub fn compress_with_stats(data: &[u8]) -> (Vec<u8>, PipelineStats) {
         (deflate_frame, "deflate")
     };
 
-    (framed.clone(), PipelineStats {
-        input_bytes:      data.len(),
-        tokenized_bytes:  tok_len,
-        compressed_bytes: framed.len(),
-        framed_bytes:     framed.len(),
-        mode_used,
-    })
+    (
+        framed.clone(),
+        PipelineStats {
+            input_bytes: data.len(),
+            tokenized_bytes: tok_len,
+            compressed_bytes: framed.len(),
+            framed_bytes: framed.len(),
+            mode_used,
+        },
+    )
 }
 
 // ── Batch API ─────────────────────────────────────────────────────────────────
@@ -170,57 +179,73 @@ pub fn compress_batch(messages: &[&[u8]]) -> Vec<Vec<u8>> {
 
 pub fn compress_batch_with_stats(messages: &[&[u8]]) -> (Vec<Vec<u8>>, PipelineStats) {
     if messages.is_empty() {
-        return (vec![], PipelineStats {
-            input_bytes: 0, tokenized_bytes: 0,
-            compressed_bytes: 0, framed_bytes: 0, mode_used: "none",
-        });
+        return (
+            vec![],
+            PipelineStats {
+                input_bytes: 0,
+                tokenized_bytes: 0,
+                compressed_bytes: 0,
+                framed_bytes: 0,
+                mode_used: "none",
+            },
+        );
     }
 
     let combined: Vec<u8> = messages.iter().flat_map(|m| m.iter().copied()).collect();
-    let entries     = dictionary::build(&combined);
+    let entries = dictionary::build(&combined);
     let dict_header = dictionary::serialize(&entries);
 
-    let mut total_input      = 0usize;
-    let mut total_tokenized  = 0usize;
-    let mut total_framed     = 0usize;
-    let mut codon_wins       = 0usize;
+    let mut total_input = 0usize;
+    let mut total_tokenized = 0usize;
+    let mut total_framed = 0usize;
+    let mut codon_wins = 0usize;
 
-    let frames: Vec<Vec<u8>> = messages.iter().map(|msg| {
-        let tokenized = codon::encode(msg, &entries);
+    let frames: Vec<Vec<u8>> = messages
+        .iter()
+        .map(|msg| {
+            let tokenized = codon::encode(msg, &entries);
 
-        let mut tok_buf = Vec::with_capacity(4 + dict_header.len() + 4 + tokenized.len());
-        tok_buf.extend_from_slice(&TOK_MAGIC);
-        tok_buf.extend_from_slice(&dict_header);
-        tok_buf.extend_from_slice(&(msg.len() as u32).to_le_bytes());
-        tok_buf.extend_from_slice(&tokenized);
+            let mut tok_buf = Vec::with_capacity(4 + dict_header.len() + 4 + tokenized.len());
+            tok_buf.extend_from_slice(&TOK_MAGIC);
+            tok_buf.extend_from_slice(&dict_header);
+            tok_buf.extend_from_slice(&(msg.len() as u32).to_le_bytes());
+            tok_buf.extend_from_slice(&tokenized);
 
-        total_input     += msg.len();
-        total_tokenized += tokenized.len();
+            total_input += msg.len();
+            total_tokenized += tokenized.len();
 
-        // Auto-select mode per message
-        let codon_frame   = frame_codon_only(tok_buf.clone());
-        let deflate_frame = frame_deflate(tok_buf);
+            // Auto-select mode per message
+            let codon_frame = frame_codon_only(tok_buf.clone());
+            let deflate_frame = frame_deflate(tok_buf);
 
-        let framed = if codon_frame.len() <= deflate_frame.len() {
-            codon_wins += 1;
-            codon_frame
-        } else {
-            deflate_frame
-        };
+            let framed = if codon_frame.len() <= deflate_frame.len() {
+                codon_wins += 1;
+                codon_frame
+            } else {
+                deflate_frame
+            };
 
-        total_framed += framed.len();
-        framed
-    }).collect();
+            total_framed += framed.len();
+            framed
+        })
+        .collect();
 
-    let mode_used = if codon_wins > messages.len() / 2 { "codon" } else { "deflate" };
+    let mode_used = if codon_wins > messages.len() / 2 {
+        "codon"
+    } else {
+        "deflate"
+    };
 
-    (frames, PipelineStats {
-        input_bytes:      total_input,
-        tokenized_bytes:  total_tokenized,
-        compressed_bytes: total_framed,
-        framed_bytes:     total_framed,
-        mode_used,
-    })
+    (
+        frames,
+        PipelineStats {
+            input_bytes: total_input,
+            tokenized_bytes: total_tokenized,
+            compressed_bytes: total_framed,
+            framed_bytes: total_framed,
+            mode_used,
+        },
+    )
 }
 
 #[cfg(test)]
