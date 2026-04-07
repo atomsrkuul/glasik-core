@@ -12,7 +12,7 @@ use crate::tokenizer::dictionary::{build, DictEntry};
 use std::collections::HashMap;
 
 pub const SLIDING_MAGIC: &[u8; 4] = b"GNSL";
-pub const MAX_WINDOW_ENTRIES: usize = 10000;
+pub const MAX_WINDOW_ENTRIES: usize = 20000;
 pub const EVICTION_AGE: u64 = 100;
 pub const MIN_SAVING_THRESHOLD: usize = 3;
 
