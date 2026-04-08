@@ -78,8 +78,8 @@ impl GlasikSliding {
 
         // Auto-select: deflate or codon-only
         let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
-        enc.write_all(&tokenized).unwrap();
-        let deflated = enc.finish().unwrap();
+        enc.write_all(&tokenized).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let deflated = enc.finish().map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let framed = if deflated.len() < tokenized.len() {
             frame::encode(&Frame::new(deflated, true))

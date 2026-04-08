@@ -68,7 +68,10 @@ impl SlidingTokenizerV2 {
         let mut out = Vec::with_capacity(12 + tokenized.len());
         out.extend_from_slice(SLIDING_MAGIC);
         out.extend_from_slice(&self.dict_version.to_le_bytes());
-        out.extend_from_slice(&(buf.len() as u32).to_le_bytes());
+        // Guard against inputs > u32::MAX
+        let orig_len = u32::try_from(buf.len())
+            .unwrap_or(u32::MAX);
+        out.extend_from_slice(&orig_len.to_le_bytes());
         out.extend_from_slice(&tokenized);
         out
     }
@@ -81,8 +84,10 @@ impl SlidingTokenizerV2 {
         if &buf[0..4] != SLIDING_MAGIC {
             return Err("sliding_v2: bad magic".into());
         }
-        let _dict_version = u32::from_le_bytes(buf[4..8].try_into().unwrap());
-        let orig_len = u32::from_le_bytes(buf[8..12].try_into().unwrap()) as usize;
+        let _dict_version = u32::from_le_bytes(
+            buf[4..8].try_into().map_err(|_| "sliding_v2: bad dict_version".to_string())?);
+        let orig_len = u32::from_le_bytes(
+            buf[8..12].try_into().map_err(|_| "sliding_v2: bad orig_len".to_string())?) as usize;
         let payload = &buf[12..];
 
         let active = self.active_entries_ref();
@@ -113,6 +118,8 @@ impl SlidingTokenizerV2 {
     pub fn import_dict(&mut self, version: u32, entries: Vec<(Vec<u8>, u64, u64)>) {
         self.window.clear();
         self.index.clear();
+        self.active_cache.clear();
+        self.cache_dirty = true;
         self.dict_version = version;
         for (bytes, freq, saving) in entries {
             let idx = self.window.len();
