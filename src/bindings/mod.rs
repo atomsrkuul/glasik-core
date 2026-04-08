@@ -194,12 +194,39 @@ impl GlasikSlidingV2 {
         self.inner.dict_version()
     }
 
-    fn export_dict(&self) -> (u32, Vec<(Vec<u8>, u64, u64)>) {
-        self.inner.export_dict()
+    fn export_dict_json(&self) -> String {
+        let (version, entries) = self.inner.export_dict();
+        let mut parts: Vec<String> = Vec::new();
+        for (bytes, freq, saving) in &entries {
+            let bytes_str: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
+            let mut entry = String::from("{");
+            entry.push_str("\"b\":[");
+            entry.push_str(&bytes_str.join(","));
+            entry.push_str("],\"f\":");
+            entry.push_str(&freq.to_string());
+            entry.push_str(",\"s\":");
+            entry.push_str(&saving.to_string());
+            entry.push('}');
+            parts.push(entry);
+        }
+        let mut out = String::from("{\"version\":");
+        out.push_str(&version.to_string());
+        out.push_str(",\"entries\":[");
+        out.push_str(&parts.join(","));
+        out.push_str("]}");
+        out
     }
 
     fn import_dict(&mut self, version: u32, entries: Vec<(Vec<u8>, u64, u64)>) {
         self.inner.import_dict(version, entries);
+    }
+
+    #[staticmethod]
+    fn with_bundled_dict() -> GlasikSlidingV2 {
+        let entries = crate::static_dict::load_static_dict();
+        GlasikSlidingV2 {
+            inner: crate::tokenizer::sliding_v2::SlidingTokenizerV2::new_with_static(entries),
+        }
     }
 
     #[staticmethod]

@@ -1,0 +1,31 @@
+=== GN Static Dict Repeatability (parallel brotli) ===
+Corpus       Seed     gzip  brotli      L2   L2+sd   L3+sd      L3+sdvBr
+--------------------------------------------------------------------------------
+ShareGPT     precomputing brotli/gzip (8 cores)...
+ShareGPT       42    2.174x   2.450x   2.394x   2.457x   2.511x   -2.4% BEATS  (497s)
+ShareGPT      123    2.183x   2.458x   2.409x   2.469x   2.534x   -3.0% BEATS  (517s)
+ShareGPT      777    2.178x   2.451x   2.403x   2.463x   2.520x   -2.8% BEATS  (563s)
+
+WildChat     precomputing brotli/gzip (8 cores)...
+WildChat       42    2.033x   2.241x   2.157x   2.214x   2.264x   -1.0% BEATS  (421s)
+WildChat      123    2.011x   2.223x   2.129x   2.187x   2.239x   -0.7% BEATS  (413s)
+WildChat      777    2.029x   2.239x   2.150x   2.210x   2.260x   -0.9% BEATS  (407s)
+
+LMSYS        precomputing brotli/gzip (8 cores)...
+LMSYS          42    2.080x   2.325x   2.237x   2.316x   2.400x   -3.1% BEATS  (453s)
+LMSYS         123    2.069x   2.310x   2.214x   2.299x   2.376x   -2.8% BEATS  (443s)
+LMSYS         777    2.090x   2.330x   2.242x   2.328x   2.402x   -3.0% BEATS  (458s)
+
+Ubuntu-IRC   precomputing brotli/gzip (8 cores)...
+Ubuntu-IRC     42    1.391x   1.622x   1.412x   1.517x   1.531x     +5.9% gap  (38s)
+Ubuntu-IRC    123    1.392x   1.625x   1.414x   1.522x   1.532x     +6.1% gap  (37s)
+Ubuntu-IRC    777    1.389x   1.620x   1.406x   1.518x   1.527x     +6.1% gap  (37s)
+
+
+=== SUMMARY (avg 3 seeds, n=2000) ===
+Corpus          gzip  brotli      L2   L2+sd   L3+sd      L3+sdvBr
+---------------------------------------------------------------------------
+ShareGPT       2.178x   2.453x   2.402x   2.463x   2.522x  --2.8% BEATS
+WildChat       2.025x   2.234x   2.145x   2.204x   2.254x  --0.9% BEATS
+LMSYS          2.079x   2.322x   2.231x   2.314x   2.393x  --3.1% BEATS
+Ubuntu-IRC     1.391x   1.622x   1.411x   1.519x   1.530x    +-5.7% gap
