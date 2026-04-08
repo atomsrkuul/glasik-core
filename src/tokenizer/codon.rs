@@ -26,7 +26,6 @@ impl FirstByteIndex {
         let mut buckets: Vec<Vec<(Vec<u8>, u8)>> = vec![Vec::new(); 256];
         for (id, entry) in entries.iter().enumerate() {
             if entry.bytes.is_empty() { continue; }
-            if id >= 255 { break; } // u8 token ID limit: 1..=255 (0 reserved)
             let first = entry.bytes[0] as usize;
             buckets[first].push((entry.bytes.clone(), (id + 1) as u8));
         }

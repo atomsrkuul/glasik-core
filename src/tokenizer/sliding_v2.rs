@@ -30,8 +30,6 @@ pub struct SlidingTokenizerV2 {
     batch_count: u64,
     dict_version: u32,
     index: HashMap<Vec<u8>, usize>,
-    active_cache: Vec<crate::tokenizer::dictionary::DictEntry>,
-    cache_dirty: bool,
 }
 
 impl SlidingTokenizerV2 {
@@ -41,8 +39,6 @@ impl SlidingTokenizerV2 {
             batch_count: 0,
             dict_version: 0,
             index: HashMap::new(),
-            active_cache: Vec::new(),
-            cache_dirty: true,
         }
     }
 
@@ -57,7 +53,19 @@ impl SlidingTokenizerV2 {
             self.dict_version = self.dict_version.wrapping_add(1);
         }
 
-        let active = self.active_entries();
+        // Hybrid: chunk-specific entries first, then fill with window entries
+        // Chunk entries are most relevant for current content
+        // Window entries provide domain vocabulary for patterns not in current chunk
+        let mut active = batch_entries.clone();
+        let window_entries = self.active_entries();
+        for we in window_entries {
+            if active.len() >= 500 { break; }
+            // Only add if not already covered by chunk-specific entries
+            if !active.iter().any(|e| e.bytes == we.bytes) {
+                active.push(we);
+            }
+        }
+        active.truncate(500);
         let tokenized = if active.is_empty() {
             buf.to_vec()
         } else {
@@ -90,7 +98,7 @@ impl SlidingTokenizerV2 {
             buf[8..12].try_into().map_err(|_| "sliding_v2: bad orig_len".to_string())?) as usize;
         let payload = &buf[12..];
 
-        let active = self.active_entries_ref();
+        let active = self.active_entries();
         let decoded = if active.is_empty() {
             payload.to_vec()
         } else {
@@ -107,7 +115,7 @@ impl SlidingTokenizerV2 {
 
     /// Export current dictionary for out-of-band sync or storage.
     pub fn export_dict(&self) -> (u32, Vec<(Vec<u8>, u64, u64)>) {
-        let entries = self.active_entries_ref();
+        let entries = self.active_entries();
         let exported = entries.iter().map(|e| {
             (e.bytes.clone(), e.freq as u64, e.saving as u64)
         }).collect();
@@ -118,8 +126,6 @@ impl SlidingTokenizerV2 {
     pub fn import_dict(&mut self, version: u32, entries: Vec<(Vec<u8>, u64, u64)>) {
         self.window.clear();
         self.index.clear();
-        self.active_cache.clear();
-        self.cache_dirty = true;
         self.dict_version = version;
         for (bytes, freq, saving) in entries {
             let idx = self.window.len();
@@ -172,7 +178,6 @@ impl SlidingTokenizerV2 {
                 }
             }
         }
-        if changed { self.cache_dirty = true; }
         changed
     }
 
@@ -191,7 +196,6 @@ impl SlidingTokenizerV2 {
         for (i, e) in self.window.iter().enumerate() {
             self.index.insert(e.bytes.clone(), i);
         }
-        self.cache_dirty = true;
     }
 
     fn worst_entry(&self, min_value: u64) -> Option<usize> {
@@ -204,24 +208,11 @@ impl SlidingTokenizerV2 {
             .map(|(i, _)| i)
     }
 
-    fn active_entries(&mut self) -> Vec<DictEntry> {
-        if self.cache_dirty {
-            let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
-            entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
-            self.active_cache = entries.iter().map(|e| DictEntry {
-                bytes: e.bytes.clone(),
-                freq: e.cumulative_freq as usize,
-                saving: e.saving as usize,
-            }).collect();
-            self.cache_dirty = false;
-        }
-        self.active_cache.clone()
-    }
-
-    fn active_entries_ref(&self) -> Vec<DictEntry> {
+    fn active_entries(&self) -> Vec<DictEntry> {
         let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
         entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
-        entries.iter().map(|e| DictEntry {
+        // Cap at 254 -- codon token IDs are u8, 0 reserved, so max 255 entries
+        entries.iter().take(254).map(|e| DictEntry {
             bytes: e.bytes.clone(),
             freq: e.cumulative_freq as usize,
             saving: e.saving as usize,
@@ -245,7 +236,6 @@ impl SlidingTokenizerV2 {
             });
         }
         tok.dict_version = 1; // static dict = version 1
-        tok.cache_dirty = true;
         tok
     }
 
