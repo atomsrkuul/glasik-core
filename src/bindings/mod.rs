@@ -193,6 +193,21 @@ impl GlasikSlidingV2 {
     fn dict_version(&self) -> u32 {
         self.inner.dict_version()
     }
+
+    fn export_dict(&self) -> (u32, Vec<(Vec<u8>, u64, u64)>) {
+        self.inner.export_dict()
+    }
+
+    fn import_dict(&mut self, version: u32, entries: Vec<(Vec<u8>, u64, u64)>) {
+        self.inner.import_dict(version, entries);
+    }
+
+    #[staticmethod]
+    fn from_static_dict(entries: Vec<(Vec<u8>, u64, u64)>) -> GlasikSlidingV2 {
+        GlasikSlidingV2 {
+            inner: crate::tokenizer::sliding_v2::SlidingTokenizerV2::new_with_static(entries),
+        }
+    }
 }
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {

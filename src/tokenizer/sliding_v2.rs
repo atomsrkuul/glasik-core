@@ -200,6 +200,28 @@ impl SlidingTokenizerV2 {
             saving: e.saving as usize,
         }).collect()
     }
+
+    /// Initialize with pre-trained static dictionary entries.
+    /// Static entries get high base frequency so eviction treats them as established.
+    pub fn new_with_static(entries: Vec<(Vec<u8>, u64, u64)>) -> Self {
+        let mut tok = SlidingTokenizerV2::new();
+        for (bytes, freq, saving) in entries {
+            if saving < MIN_SAVING_THRESHOLD as u64 { continue; }
+            let idx = tok.window.len();
+            if idx >= MAX_WINDOW_ENTRIES { break; }
+            tok.index.insert(bytes.clone(), idx);
+            tok.window.push(WindowEntry {
+                bytes,
+                cumulative_freq: freq,
+                last_seen: 0, // batch 0 = static, never evicted by age alone
+                saving,
+            });
+        }
+        tok.dict_version = 1; // static dict = version 1
+        tok
+    }
+
+
 }
 
 impl Default for SlidingTokenizerV2 {
