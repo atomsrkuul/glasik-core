@@ -236,6 +236,56 @@ impl GlasikSlidingV2 {
         }
     }
 }
+
+/// Level 4 sliding window with fractal dictionary compression
+#[pyclass]
+pub struct GlasikSlidingL4 {
+    inner: crate::sliding_v2_l4::SlidingTokenizerL4,
+}
+
+#[pymethods]
+impl GlasikSlidingL4 {
+    #[new]
+    fn new() -> Self {
+        GlasikSlidingL4 { inner: crate::sliding_v2_l4::SlidingTokenizerL4::new() }
+    }
+
+    #[staticmethod]
+    fn with_bundled_dict() -> GlasikSlidingL4 {
+        let entries = crate::static_dict::load_static_dict();
+        GlasikSlidingL4 {
+            inner: crate::sliding_v2_l4::SlidingTokenizerL4::new_with_static(entries),
+        }
+    }
+
+    fn compress(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        use pyo3::exceptions::PyRuntimeError;
+
+        let tokenized = self.inner.encode(data);
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn stats(&self) -> (usize, u64) { self.inner.stats() }
+
+    fn snapshot_size(&self) -> usize { self.inner.snapshot_size() }
+
+    fn get_snapshot(&self, py: Python) -> PyResult<Option<Py<PyBytes>>> {
+        Ok(self.inner.get_snapshot().map(|s| PyBytes::new(py, s).into()))
+    }
+
+    #[staticmethod]
+    fn from_snapshot(py: Python, snapshot: &[u8]) -> GlasikSlidingL4 {
+        GlasikSlidingL4 {
+            inner: crate::sliding_v2_l4::SlidingTokenizerL4::restore_from_snapshot(snapshot),
+        }
+    }
+}
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
@@ -251,6 +301,7 @@ fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_ans_compress_o1, m)?)?;
     m.add_function(wrap_pyfunction!(gn_ans_decompress_o1, m)?)?;
     m.add_class::<GlasikSlidingV2>()?;
+    m.add_class::<GlasikSlidingL4>()?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

@@ -53,19 +53,7 @@ impl SlidingTokenizerV2 {
             self.dict_version = self.dict_version.wrapping_add(1);
         }
 
-        // Hybrid: chunk-specific entries first, then fill with window entries
-        // Chunk entries are most relevant for current content
-        // Window entries provide domain vocabulary for patterns not in current chunk
-        let mut active = batch_entries.clone();
-        let window_entries = self.active_entries();
-        for we in window_entries {
-            if active.len() >= 500 { break; }
-            // Only add if not already covered by chunk-specific entries
-            if !active.iter().any(|e| e.bytes == we.bytes) {
-                active.push(we);
-            }
-        }
-        active.truncate(500);
+        let active = self.active_entries();
         let tokenized = if active.is_empty() {
             buf.to_vec()
         } else {
@@ -211,8 +199,7 @@ impl SlidingTokenizerV2 {
     fn active_entries(&self) -> Vec<DictEntry> {
         let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
         entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
-        // Cap at 254 -- codon token IDs are u8, 0 reserved, so max 255 entries
-        entries.iter().take(254).map(|e| DictEntry {
+        entries.iter().map(|e| DictEntry {
             bytes: e.bytes.clone(),
             freq: e.cumulative_freq as usize,
             saving: e.saving as usize,
