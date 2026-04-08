@@ -18,11 +18,12 @@ pub const ESCAPE: u8 = 0x01;
 
 /// First-byte index: maps first byte of each pattern to candidate list.
 /// First-byte index: maps first byte of each pattern to candidate list.
-struct FirstByteIndex {
+#[derive(Debug)]
+pub struct FirstByteIndex {
     buckets: Vec<Vec<(Vec<u8>, u8)>>,
 }
 impl FirstByteIndex {
-    fn build(entries: &[DictEntry]) -> Self {
+    pub fn build(entries: &[DictEntry]) -> Self {
         let mut buckets: Vec<Vec<(Vec<u8>, u8)>> = vec![Vec::new(); 256];
         for (id, entry) in entries.iter().enumerate() {
             if entry.bytes.is_empty() { continue; }
@@ -34,7 +35,7 @@ impl FirstByteIndex {
         }
         FirstByteIndex { buckets }
     }
-    fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
+    pub fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
         let mut matches: Vec<(usize, u8, usize)> = Vec::new();
         for bucket in &self.buckets {
             for (pattern, token_id) in bucket {
@@ -59,18 +60,10 @@ impl FirstByteIndex {
 
 /// Encode: substitute dictionary entries with 2-byte codon tokens.
 /// Returns tokenized buffer. Prepends no header -- caller handles framing.
-pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
-    if entries.is_empty() {
-        return escape_only(buf);
-    }
-
-    let index = FirstByteIndex::build(entries);
-    let matches = index.find_matches(buf);
-
+pub fn assemble_from_matches(buf: &[u8], matches: &[(usize, u8, usize)]) -> Vec<u8> {
     if matches.is_empty() {
         return escape_only(buf);
     }
-
     // Greedy left-to-right assembly
     let mut out = Vec::with_capacity(buf.len());
     let mut pos = 0usize;
@@ -115,6 +108,16 @@ pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
         }
     }
     out
+}
+
+
+pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
+    if entries.is_empty() {
+        return escape_only(buf);
+    }
+    let index = FirstByteIndex::build(entries);
+    let matches = index.find_matches(buf);
+    assemble_from_matches(buf, &matches)
 }
 
 /// Decode: reverse codon substitution using dictionary entries.

@@ -7,7 +7,7 @@
 //! This eliminates the ~2KB per-frame dict overhead that made v1
 //! net-negative on short chunks.
 
-use crate::tokenizer::codon::{decode as codon_decode, encode as codon_encode};
+use crate::tokenizer::codon::{decode as codon_decode, encode as codon_encode, FirstByteIndex};
 use crate::tokenizer::dictionary::{build, DictEntry};
 use ahash::AHashMap as HashMap;
 
@@ -30,6 +30,9 @@ pub struct SlidingTokenizerV2 {
     batch_count: u64,
     dict_version: u32,
     index: HashMap<Vec<u8>, usize>,
+    cached_index: Option<FirstByteIndex>,
+    cached_entries: Vec<crate::tokenizer::dictionary::DictEntry>,
+    index_dirty: bool,
 }
 
 impl SlidingTokenizerV2 {
@@ -39,6 +42,9 @@ impl SlidingTokenizerV2 {
             batch_count: 0,
             dict_version: 0,
             index: HashMap::new(),
+            cached_index: None,
+            cached_entries: Vec::new(),
+            index_dirty: true,
         }
     }
 
@@ -114,6 +120,9 @@ impl SlidingTokenizerV2 {
     pub fn import_dict(&mut self, version: u32, entries: Vec<(Vec<u8>, u64, u64)>) {
         self.window.clear();
         self.index.clear();
+        self.cached_index = None;
+        self.cached_entries.clear();
+        self.index_dirty = true;
         self.dict_version = version;
         for (bytes, freq, saving) in entries {
             let idx = self.window.len();
@@ -166,6 +175,7 @@ impl SlidingTokenizerV2 {
                 }
             }
         }
+        if changed { self.index_dirty = true; }
         changed
     }
 
@@ -184,6 +194,7 @@ impl SlidingTokenizerV2 {
         for (i, e) in self.window.iter().enumerate() {
             self.index.insert(e.bytes.clone(), i);
         }
+        self.index_dirty = true;
     }
 
     fn worst_entry(&self, min_value: u64) -> Option<usize> {
@@ -196,7 +207,25 @@ impl SlidingTokenizerV2 {
             .map(|(i, _)| i)
     }
 
+    fn get_index(&mut self) -> &FirstByteIndex {
+        if self.index_dirty {
+            let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
+            entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+            self.cached_entries = entries.iter().map(|e| DictEntry {
+                bytes: e.bytes.clone(),
+                freq: e.cumulative_freq as usize,
+                saving: e.saving as usize,
+            }).collect();
+            self.cached_index = Some(FirstByteIndex::build(&self.cached_entries));
+            self.index_dirty = false;
+        }
+        self.cached_index.as_ref().unwrap()
+    }
+
     fn active_entries(&self) -> Vec<DictEntry> {
+        if !self.cached_entries.is_empty() && !self.index_dirty {
+            return self.cached_entries.clone();
+        }
         let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
         entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
         entries.iter().map(|e| DictEntry {
@@ -223,6 +252,7 @@ impl SlidingTokenizerV2 {
             });
         }
         tok.dict_version = 1; // static dict = version 1
+        tok.index_dirty = true;
         tok
     }
 
