@@ -36,14 +36,16 @@ impl FirstByteIndex {
         FirstByteIndex { buckets }
     }
     pub fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
+        use memchr::memmem;
         let mut matches: Vec<(usize, u8, usize)> = Vec::new();
         for bucket in &self.buckets {
             for (pattern, token_id) in bucket {
                 if pattern.is_empty() || pattern.len() > buf.len() { continue; }
+                // memmem uses SIMD acceleration for fast pattern search
+                let finder = memmem::Finder::new(pattern.as_slice());
                 let mut start = 0;
                 while start + pattern.len() <= buf.len() {
-                    if let Some(rel) = buf[start..].windows(pattern.len())
-                        .position(|w| w == pattern.as_slice()) {
+                    if let Some(rel) = finder.find(&buf[start..]) {
                         let pos = start + rel;
                         if buf[pos] != ESCAPE {
                             matches.push((pos, *token_id, pattern.len()));
