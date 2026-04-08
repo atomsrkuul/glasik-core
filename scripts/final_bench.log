@@ -1,0 +1,33 @@
+=== GN FINAL REPEATABILITY BENCHMARK ===
+4 corpora x 3 seeds x n=2000, brotli-6, L3+static
+
+Corpus       Seed     gzip  brotli      L2   L2+sd   L3+sd      L3+sdvBr
+----------------------------------------------------------------------------------
+ShareGPT     precomputing (8 cores) avg=1209B...
+ShareGPT       42    2.174x   2.450x   2.394x   2.457x   2.511x   -2.4% BEATS  (495s)
+ShareGPT      123    2.183x   2.458x   2.410x   2.469x   2.534x   -3.0% BEATS  (537s)
+ShareGPT      777    2.178x   2.451x   2.404x   2.463x   2.521x   -2.8% BEATS  (607s)
+
+WildChat     precomputing (8 cores) avg=1225B...
+WildChat       42    2.033x   2.241x   2.157x   2.215x   2.264x   -1.0% BEATS  (452s)
+WildChat      123    2.011x   2.223x   2.128x   2.187x   2.239x   -0.7% BEATS  (446s)
+WildChat      777    2.029x   2.239x   2.151x   2.210x   2.260x   -0.9% BEATS  (436s)
+
+LMSYS        precomputing (8 cores) avg=966B...
+LMSYS          42    2.080x   2.325x   2.237x   2.316x   2.400x   -3.1% BEATS  (459s)
+LMSYS         123    2.069x   2.310x   2.214x   2.299x   2.376x   -2.8% BEATS  (417s)
+LMSYS         777    2.090x   2.330x   2.243x   2.327x   2.402x   -3.0% BEATS  (380s)
+
+Ubuntu-IRC   precomputing (8 cores) avg=747B...
+Ubuntu-IRC     42    1.643x   1.830x   1.727x   1.815x   1.837x   -0.4% BEATS  (82s)
+Ubuntu-IRC    123    1.643x   1.829x   1.723x   1.814x   1.840x   -0.6% BEATS  (81s)
+Ubuntu-IRC    777    1.644x   1.830x   1.729x   1.816x   1.838x   -0.4% BEATS  (80s)
+
+
+=== FINAL SUMMARY (avg 3 seeds, n=2000) ===
+Corpus          gzip  brotli      L2   L2+sd   L3+sd      L3+sdvBr
+------------------------------------------------------------------------------
+ShareGPT       2.178x   2.453x   2.403x   2.463x   2.522x  --2.8% BEATS
+WildChat       2.025x   2.234x   2.145x   2.204x   2.255x  --0.9% BEATS
+LMSYS          2.079x   2.322x   2.231x   2.314x   2.393x  --3.1% BEATS
+Ubuntu-IRC     1.643x   1.829x   1.726x   1.815x   1.838x  --0.5% BEATS
