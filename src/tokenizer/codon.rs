@@ -36,13 +36,18 @@ impl FirstByteIndex {
         FirstByteIndex { buckets }
     }
     pub fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
-        use memchr::memmem;
+        // Build byte presence mask -- O(n) once, then O(1) per pattern pre-filter
+        let mut present = [false; 256];
+        for &b in buf { present[b as usize] = true; }
+
         let mut matches: Vec<(usize, u8, usize)> = Vec::new();
-        for bucket in &self.buckets {
+        for (bi, bucket) in self.buckets.iter().enumerate() {
+            // Skip entire bucket if first byte not in buffer
+            if !present[bi] { continue; }
             for (pattern, token_id) in bucket {
                 if pattern.is_empty() || pattern.len() > buf.len() { continue; }
-                // memmem uses SIMD acceleration for fast pattern search
-                let finder = memmem::Finder::new(pattern.as_slice());
+                if pattern.len() > 1 && !present[pattern[1] as usize] { continue; }
+                let finder = memchr::memmem::Finder::new(pattern.as_slice());
                 let mut start = 0;
                 while start + pattern.len() <= buf.len() {
                     if let Some(rel) = finder.find(&buf[start..]) {
