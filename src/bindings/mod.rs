@@ -286,6 +286,20 @@ impl GlasikSlidingL4 {
         }
     }
 }
+
+#[pyfunction]
+fn gn_compress_parallel(py: Python, chunks: Vec<Vec<u8>>) -> PyResult<Py<PyList>> {
+    use rayon::prelude::*;
+    let compressed: Vec<Vec<u8>> = chunks.par_iter()
+        .map(|chunk| crate::pipeline::compress(chunk))
+        .collect();
+    let list = PyList::empty(py);
+    for c in compressed {
+        list.append(PyBytes::new(py, &c))?;
+    }
+    Ok(list.into())
+}
+
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
@@ -302,6 +316,7 @@ fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_ans_decompress_o1, m)?)?;
     m.add_class::<GlasikSlidingV2>()?;
     m.add_class::<GlasikSlidingL4>()?;
+    m.add_function(wrap_pyfunction!(gn_compress_parallel, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
