@@ -3,13 +3,14 @@
 //! Rolling hash (Rabin-Karp, Mersenne prime) O(n) frequency analysis.
 //! Multi-pass: second dict built from non-token residual only.
 //! Pattern-agnostic: structure emerges from frequency data.
+use ahash::AHashMap;
 
 pub const MIN_STR_LEN: usize = 4;
-pub const MAX_STR_LEN: usize = 128;
+pub const MAX_STR_LEN: usize = 32;
 pub const MIN_FREQ: usize = 3;
 pub const MAX_ENTRIES: usize = 200;
 pub const TOKEN_BYTES: usize = 2;
-pub const MAX_LENGTHS: usize = 24;
+pub const MAX_LENGTHS: usize = 8;
 
 const BASE: u64 = 131;
 const MOD: u64 = (1 << 61) - 1;
@@ -27,7 +28,7 @@ impl DictEntry {
     }
 }
 
-fn scan_length(buf: &[u8], len: usize, out: &mut std::collections::HashMap<Vec<u8>, usize>) {
+fn scan_length(buf: &[u8], len: usize, out: &mut AHashMap<Vec<u8>, usize>) {
     if buf.len() < len {
         return;
     }
@@ -35,8 +36,8 @@ fn scan_length(buf: &[u8], len: usize, out: &mut std::collections::HashMap<Vec<u
     for _ in 0..len {
         base_pow = ((base_pow as u128 * BASE as u128) % MOD as u128) as u64;
     }
-    let mut map: std::collections::HashMap<u64, (u32, usize)> =
-        std::collections::HashMap::with_capacity(buf.len() / len + 1);
+    let mut map: AHashMap<u64, (u32, usize)> =
+        AHashMap::with_capacity(buf.len() / len + 1);
     let mut hash: u64 = 0;
     for i in 0..len {
         hash = ((hash as u128 * BASE as u128 + buf[i] as u128) % MOD as u128) as u64;
@@ -78,8 +79,8 @@ fn scan_length(buf: &[u8], len: usize, out: &mut std::collections::HashMap<Vec<u
 fn length_weights(max_len: usize) -> Vec<(usize, f64)> {
     use std::cell::RefCell;
     thread_local! {
-        static WEIGHTS: RefCell<std::collections::HashMap<usize, f64>> =
-            RefCell::new(std::collections::HashMap::new());
+        static WEIGHTS: RefCell<AHashMap<usize, f64>> =
+            RefCell::new(AHashMap::new());
     }
     WEIGHTS.with(|w| {
         let w = w.borrow();
@@ -102,11 +103,11 @@ fn length_weights(max_len: usize) -> Vec<(usize, f64)> {
     })
 }
 
-fn update_weights(savings_per_len: &std::collections::HashMap<usize, usize>) {
+fn update_weights(savings_per_len: &AHashMap<usize, usize>) {
     use std::cell::RefCell;
     thread_local! {
-        static WEIGHTS: RefCell<std::collections::HashMap<usize, f64>> =
-            RefCell::new(std::collections::HashMap::new());
+        static WEIGHTS: RefCell<AHashMap<usize, f64>> =
+            RefCell::new(AHashMap::new());
     }
     WEIGHTS.with(|w| {
         let mut w = w.borrow_mut();
@@ -123,16 +124,16 @@ fn update_weights(savings_per_len: &std::collections::HashMap<usize, usize>) {
     });
 }
 
-fn build_frequency_map(buf: &[u8]) -> std::collections::HashMap<Vec<u8>, usize> {
-    let mut freq = std::collections::HashMap::new();
+fn build_frequency_map(buf: &[u8]) -> AHashMap<Vec<u8>, usize> {
+    let mut freq = AHashMap::new();
     let max_len = MAX_STR_LEN.min(buf.len() / 2);
     if max_len < MIN_STR_LEN {
         return freq;
     }
 
     let lengths = length_weights(max_len);
-    let mut savings_per_len: std::collections::HashMap<usize, usize> =
-        std::collections::HashMap::new();
+    let mut savings_per_len: AHashMap<usize, usize> =
+        AHashMap::new();
 
     for (len, _weight) in &lengths {
         let before = freq.values().map(|&v: &usize| v).sum::<usize>();
@@ -146,7 +147,7 @@ fn build_frequency_map(buf: &[u8]) -> std::collections::HashMap<Vec<u8>, usize> 
     freq
 }
 
-fn select_entries(freq: std::collections::HashMap<Vec<u8>, usize>) -> Vec<DictEntry> {
+fn select_entries(freq: AHashMap<Vec<u8>, usize>) -> Vec<DictEntry> {
     let mut candidates: Vec<DictEntry> = freq
         .into_iter()
         .filter_map(|(bytes, count)| {

@@ -17,61 +17,41 @@ use super::dictionary::DictEntry;
 pub const ESCAPE: u8 = 0x01;
 
 /// First-byte index: maps first byte of each pattern to candidate list.
-/// Built once per encode call, reused for all substitutions.
+/// First-byte index: maps first byte of each pattern to candidate list.
 struct FirstByteIndex {
-    /// buckets[b] = list of (pattern_bytes, token_id) for patterns starting with b
     buckets: Vec<Vec<(Vec<u8>, u8)>>,
 }
-
 impl FirstByteIndex {
     fn build(entries: &[DictEntry]) -> Self {
         let mut buckets: Vec<Vec<(Vec<u8>, u8)>> = vec![Vec::new(); 256];
         for (id, entry) in entries.iter().enumerate() {
-            if entry.bytes.is_empty() {
-                continue;
-            }
+            if entry.bytes.is_empty() { continue; }
             let first = entry.bytes[0] as usize;
-            // id+1 because 0 is reserved for escaped literal ESCAPE byte
             buckets[first].push((entry.bytes.clone(), (id + 1) as u8));
         }
-        // Sort each bucket longest-first for greedy longest-match
         for bucket in &mut buckets {
             bucket.sort_unstable_by(|a, b| b.0.len().cmp(&a.0.len()));
         }
         FirstByteIndex { buckets }
     }
-
-    /// Find all non-overlapping match positions using indexOf scanning.
-    /// Returns vec of (position, token_id, match_len) sorted by position.
     fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
         let mut matches: Vec<(usize, u8, usize)> = Vec::new();
-
         for bucket in &self.buckets {
             for (pattern, token_id) in bucket {
-                if pattern.is_empty() || pattern.len() > buf.len() {
-                    continue;
-                }
-                // Use windows() to find all occurrences -- native Rust,
-                // compiler can vectorize this
+                if pattern.is_empty() || pattern.len() > buf.len() { continue; }
                 let mut start = 0;
                 while start + pattern.len() <= buf.len() {
-                    if let Some(rel) = buf[start..]
-                        .windows(pattern.len())
-                        .position(|w| w == pattern.as_slice())
-                    {
+                    if let Some(rel) = buf[start..].windows(pattern.len())
+                        .position(|w| w == pattern.as_slice()) {
                         let pos = start + rel;
                         if buf[pos] != ESCAPE {
                             matches.push((pos, *token_id, pattern.len()));
                         }
                         start = pos + pattern.len();
-                    } else {
-                        break;
-                    }
+                    } else { break; }
                 }
             }
         }
-
-        // Sort by position, break ties longest-match first
         matches.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.2.cmp(&a.2)));
         matches
     }

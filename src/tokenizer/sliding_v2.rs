@@ -9,7 +9,7 @@
 
 use crate::tokenizer::codon::{decode as codon_decode, encode as codon_encode};
 use crate::tokenizer::dictionary::{build, DictEntry};
-use std::collections::HashMap;
+use ahash::AHashMap as HashMap;
 
 pub const SLIDING_MAGIC: &[u8; 4] = b"GNSL";
 pub const MAX_WINDOW_ENTRIES: usize = 20000;
@@ -30,6 +30,8 @@ pub struct SlidingTokenizerV2 {
     batch_count: u64,
     dict_version: u32,
     index: HashMap<Vec<u8>, usize>,
+    active_cache: Vec<crate::tokenizer::dictionary::DictEntry>,
+    cache_dirty: bool,
 }
 
 impl SlidingTokenizerV2 {
@@ -39,6 +41,8 @@ impl SlidingTokenizerV2 {
             batch_count: 0,
             dict_version: 0,
             index: HashMap::new(),
+            active_cache: Vec::new(),
+            cache_dirty: true,
         }
     }
 
@@ -81,7 +85,7 @@ impl SlidingTokenizerV2 {
         let orig_len = u32::from_le_bytes(buf[8..12].try_into().unwrap()) as usize;
         let payload = &buf[12..];
 
-        let active = self.active_entries();
+        let active = self.active_entries_ref();
         let decoded = if active.is_empty() {
             payload.to_vec()
         } else {
@@ -98,7 +102,7 @@ impl SlidingTokenizerV2 {
 
     /// Export current dictionary for out-of-band sync or storage.
     pub fn export_dict(&self) -> (u32, Vec<(Vec<u8>, u64, u64)>) {
-        let entries = self.active_entries();
+        let entries = self.active_entries_ref();
         let exported = entries.iter().map(|e| {
             (e.bytes.clone(), e.freq as u64, e.saving as u64)
         }).collect();
@@ -161,6 +165,7 @@ impl SlidingTokenizerV2 {
                 }
             }
         }
+        if changed { self.cache_dirty = true; }
         changed
     }
 
@@ -179,6 +184,7 @@ impl SlidingTokenizerV2 {
         for (i, e) in self.window.iter().enumerate() {
             self.index.insert(e.bytes.clone(), i);
         }
+        self.cache_dirty = true;
     }
 
     fn worst_entry(&self, min_value: u64) -> Option<usize> {
@@ -191,7 +197,21 @@ impl SlidingTokenizerV2 {
             .map(|(i, _)| i)
     }
 
-    fn active_entries(&self) -> Vec<DictEntry> {
+    fn active_entries(&mut self) -> Vec<DictEntry> {
+        if self.cache_dirty {
+            let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
+            entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+            self.active_cache = entries.iter().map(|e| DictEntry {
+                bytes: e.bytes.clone(),
+                freq: e.cumulative_freq as usize,
+                saving: e.saving as usize,
+            }).collect();
+            self.cache_dirty = false;
+        }
+        self.active_cache.clone()
+    }
+
+    fn active_entries_ref(&self) -> Vec<DictEntry> {
         let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
         entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
         entries.iter().map(|e| DictEntry {
@@ -218,6 +238,7 @@ impl SlidingTokenizerV2 {
             });
         }
         tok.dict_version = 1; // static dict = version 1
+        tok.cache_dirty = true;
         tok
     }
 
