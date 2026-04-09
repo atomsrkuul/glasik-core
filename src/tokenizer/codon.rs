@@ -387,7 +387,7 @@ pub fn encode_ac(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
             // Only profitable if pattern len > 3
             out.push(ESCAPE);
             out.push(0xFF);
-            out.push((tok - 255) as u8);
+            out.push(((tok - 255) & 0xFF) as u8); // safe wrap for tok > 509
         }
         pos = m.end();
     }

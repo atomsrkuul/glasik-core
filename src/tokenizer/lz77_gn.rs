@@ -148,7 +148,7 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
                 if id <= 254 {
                     out.push(ESCAPE); out.push(id as u8); i += len;
                 } else if !u8_only {
-                    out.push(ESCAPE); out.push(0xFF); out.push((id-255) as u8); i += len;
+                    out.push(ESCAPE); out.push(0xFF); out.push(((id-255) & 0xFF) as u8); i += len;
                 } else {
                     out.push(buf[i]); i += 1;
                 }
@@ -177,7 +177,7 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
                 if id <= 254 {
                     out.push(ESCAPE); out.push(id as u8); i += len; continue;
                 } else if !u8_only {
-                    out.push(ESCAPE); out.push(0xFF); out.push((id-255) as u8); i += len; continue;
+                    out.push(ESCAPE); out.push(0xFF); out.push(((id-255) & 0xFF) as u8); i += len; continue;
                 }
             }
 
@@ -227,7 +227,7 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
                     // 2-byte token: ESCAPE + id (1..=254)
                     out.push(ESCAPE); out.push(id as u8); i += len;
                 } else if !u8_only {
-                    // 3-byte extended token: ESCAPE + 0xFF + (id-255) as u8
+                    // 3-byte extended token: ESCAPE + 0xFF + ((id-255) & 0xFF) as u8
                     // Supports IDs 255..509 (255 more patterns at 3-byte cost)
                     // Only use if pattern is long enough to benefit (len >= 4 saves >= 1 byte)
                     let ext_id = (id - 255) as u8;
@@ -503,7 +503,7 @@ impl<const PREFIX: usize> GNHybridEncoder<PREFIX> {
                     if id <= 254 {
                         out.push(ESCAPE); out.push(id as u8);
                     } else {
-                        out.push(ESCAPE); out.push(0xFF); out.push((id-255) as u8);
+                        out.push(ESCAPE); out.push(0xFF); out.push(((id-255) & 0xFF) as u8);
                     }
                     self.lz_insert(buf, i);
                     i += vlen;

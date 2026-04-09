@@ -246,7 +246,7 @@ impl SlidingTokenizerV2 {
             }
             self.index_dirty = false;
         }
-        self.cached_index.as_ref().unwrap()
+        self.cached_index.as_ref().expect("cached_index must be Some after get_index build")
     }
 
     pub fn active_entries_pub(&self) -> Vec<DictEntry> { self.active_entries() }

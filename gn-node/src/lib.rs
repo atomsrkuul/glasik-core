@@ -13,6 +13,7 @@ use tokio::sync::{mpsc, oneshot};
 
 enum Job {
     CompressHybrid { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
+    CompressAC { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     RefreshVocab { resp: oneshot::Sender<usize> },
@@ -106,7 +107,7 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                     if let Some(arr) = d["entries"].as_array() {
                         let loaded: Vec<(Vec<u8>, u64, u64)> = arr.iter().filter_map(|e| {
                             let b: Vec<u8> = e["b"].as_array()?.iter()
-                                .filter_map(|x| x.as_u64().map(|v| v as u8)).collect();
+                                .filter_map(|x| x.as_u64().filter(|&v| v <= 255).map(|v| v as u8)).collect();
                             Some((b, e["f"].as_u64()?, e["s"].as_u64()?))
                         }).collect();
                         let n = loaded.len();
@@ -118,8 +119,12 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
             while let Some(job) = rx.recv().await {
                 match job {
                     Job::CompressHybrid { data, resp } => {
-                        // Hybrid: learns + encodes, adaptive vocab swap
                         let _ = resp.send(hybrid.encode(&data));
+                    }
+                    Job::CompressAC { data, resp } => {
+                        // O(n) Aho-Corasick -- fast path with full window vocab
+                        let tokenized = slider.encode_ac(&data);
+                        let _ = resp.send(deflate_buf(tokenized));
                     }
                     Job::CompressFast { data, resp } => {
                         let _ = resp.send(compress_lz77gn(&data, &tok4));
@@ -191,7 +196,7 @@ fn load_snap(slider: &mut SlidingTokenizerV2, path: &str) -> std::result::Result
         .ok_or_else(|| "no entries".to_string())?
         .iter().filter_map(|e| {
             let b: Vec<u8> = e["b"].as_array()?.iter()
-                .filter_map(|x| x.as_u64().map(|v| v as u8)).collect();
+                .filter_map(|x| x.as_u64().filter(|&v| v <= 255).map(|v| v as u8)).collect();
             Some((b, e["f"].as_u64()?, e["s"].as_u64()?))
         }).collect();
     let n = entries.len();
@@ -260,7 +265,7 @@ pub fn gn_set_vocab_sync(entries_json: String) -> u32 {
         if let Some(arr) = d.as_array() {
             let mut dict: Vec<DictEntry> = arr.iter().filter_map(|e| {
                 let b: Vec<u8> = e["b"].as_array()?.iter()
-                    .filter_map(|x| x.as_u64().map(|v| v as u8)).collect();
+                    .filter_map(|x| x.as_u64().filter(|&v| v <= 255).map(|v| v as u8)).collect();
                 let freq = e["f"].as_u64().unwrap_or(1) as usize;
                 let saving = e["s"].as_u64().unwrap_or(1) as usize;
                 Some(DictEntry { bytes: b, freq, saving })
@@ -292,6 +297,13 @@ pub async fn gn_refresh_vocab() -> Result<u32> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::RefreshVocab { resp: tx }, rx).await
         .map(|n| n as u32)
+}
+
+#[napi]
+pub async fn gn_compress_ac(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressAC { data: data.to_vec(), resp: tx }, rx).await
+        .map(Buffer::from)
 }
 
 #[napi]

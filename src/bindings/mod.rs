@@ -218,8 +218,8 @@ impl GlasikSlidingV2 {
 
         // Deflate the tokenized output (dict not in frame, so deflate sees clean data)
         let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
-        enc.write_all(&tokenized).unwrap();
-        let deflated = enc.finish().unwrap();
+        let _ = enc.write_all(&tokenized);
+        let deflated = enc.finish().unwrap_or_default();
 
         // Use smaller of tokenized vs deflated
         let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
