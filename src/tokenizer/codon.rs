@@ -411,16 +411,17 @@ pub fn encode_ac_with(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> Vec<u8> {
             if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
             else { out.push(b); }
         }
-        // Wrap to u8 -- same as codon::FirstByteIndex wrapping behavior
-        // id 0 is reserved, skip it
-        let tok = ((m.pattern().as_usize() + 1) & 0xFF) as u8;
-        if tok == 0 {
-            // Wrapped to reserved 0 -- emit literals
+        // Only emit tokens for patterns 0-253 (IDs 1-254)
+        // Patterns 254+ are skipped -- decoder uses entries[id-1] directly
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx >= 254 {
+            // Beyond u8 range -- emit literal bytes, let deflate handle
             for &b in &buf[m.start()..m.end()] {
                 if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
                 else { out.push(b); }
             }
         } else {
+            let tok = (pat_idx + 1) as u8; // 1-254, guaranteed unique
             out.push(ESCAPE); out.push(tok);
         }
         pos = m.end();

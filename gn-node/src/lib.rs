@@ -14,6 +14,7 @@ use tokio::sync::{mpsc, oneshot};
 enum Job {
     CompressHybrid { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressAC { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
+    DecompressL2 { data: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     RefreshVocab { resp: oneshot::Sender<usize> },
@@ -75,13 +76,59 @@ fn compress_lz77gn(buf: &[u8], tok: &GNPrefixTokenizer<4>) -> Vec<u8> {
     deflate_buf(tokenized)
 }
 
+const FLAG_DEFLATED: u8 = 0x01;
+const FLAG_RAW_TOKENS: u8 = 0x00;
+
 fn deflate_buf(tokenized: Vec<u8>) -> Vec<u8> {
     let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
     let max = comp.deflate_compress_bound(tokenized.len());
-    let mut out = vec![0u8; max];
-    match comp.deflate_compress(&tokenized, &mut out) {
-        Ok(n) => { out.truncate(n); if out.len() < tokenized.len() { out } else { tokenized } }
-        Err(_) => tokenized
+    let mut deflated = vec![0u8; max];
+    match comp.deflate_compress(&tokenized, &mut deflated) {
+        Ok(n) => {
+            deflated.truncate(n);
+            if deflated.len() < tokenized.len() {
+                // Prefix with FLAG_DEFLATED so decoder knows to inflate first
+                let mut out = Vec::with_capacity(1 + deflated.len());
+                out.push(FLAG_DEFLATED);
+                out.extend_from_slice(&deflated);
+                out
+            } else {
+                // Raw tokenized -- prefix with FLAG_RAW_TOKENS
+                let mut out = Vec::with_capacity(1 + tokenized.len());
+                out.push(FLAG_RAW_TOKENS);
+                out.extend_from_slice(&tokenized);
+                out
+            }
+        }
+        Err(_) => {
+            let mut out = Vec::with_capacity(1 + tokenized.len());
+            out.push(FLAG_RAW_TOKENS);
+            out.extend_from_slice(&tokenized);
+            out
+        }
+    }
+}
+
+fn inflate_buf(data: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    if data.is_empty() { return Ok(Vec::new()); }
+    let flag = data[0];
+    let payload = &data[1..];
+    if flag == 0x01 {
+        // deflate compressed
+        let mut decomp = libdeflater::Decompressor::new();
+        let mut out = vec![0u8; payload.len() * 4];
+        loop {
+            match decomp.deflate_decompress(payload, &mut out) {
+                Ok(n) => { out.truncate(n); return Ok(out); }
+                Err(_) => {
+                    let new_len = out.len() * 2;
+                    if new_len > 64 * 1024 * 1024 { return std::result::Result::Err("decompress overflow".to_string()); }
+                    out.resize(new_len, 0);
+                }
+            }
+        }
+    } else {
+        Ok(payload.to_vec())
     }
 }
 
@@ -125,6 +172,37 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         // O(n) Aho-Corasick -- fast path with full window vocab
                         let tokenized = slider.encode_ac(&data);
                         let _ = resp.send(deflate_buf(tokenized));
+                    }
+                    Job::DecompressL2 { data, resp } => {
+                        // Inflate then decode tokens using current window vocab
+                        let result = (|| -> napi::Result<Vec<u8>> {
+                            if data.is_empty() { return Ok(Vec::new()); }
+                            let flag = data[0];
+                            let payload = &data[1..];
+                            let tokenized = if flag == FLAG_DEFLATED {
+                                // Inflate first
+                                let mut decomp = libdeflater::Decompressor::new();
+                                let mut out = vec![0u8; payload.len().max(64) * 8];
+                                loop {
+                                    match decomp.deflate_decompress(payload, &mut out) {
+                                        Ok(n) => { out.truncate(n); break out; }
+                                        Err(_) => {
+                                            let nl = out.len() * 2;
+                                            if nl > 64*1024*1024 {
+                                                return Err(Error::from_reason("inflate overflow"));
+                                            }
+                                            out.resize(nl, 0);
+                                        }
+                                    }
+                                }
+                            } else {
+                                // Raw tokenized -- decode directly
+                                payload.to_vec()
+                            };
+                            slider.decode_raw(&tokenized)
+                                .map_err(Error::from_reason)
+                        })();
+                        let _ = resp.send(result);
                     }
                     Job::CompressFast { data, resp } => {
                         let _ = resp.send(compress_lz77gn(&data, &tok4));
@@ -300,6 +378,13 @@ pub async fn gn_refresh_vocab() -> Result<u32> {
 }
 
 #[napi]
+pub async fn gn_decompress_ac(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::DecompressL2 { data: data.to_vec(), resp: tx }, rx).await?
+        .map(Buffer::from)
+}
+
+#[napi]
 pub async fn gn_compress_ac(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressAC { data: data.to_vec(), resp: tx }, rx).await
@@ -355,6 +440,13 @@ pub async fn gn_load_snapshot(path: String) -> Result<String> {
 
 #[napi]
 pub fn gn_decompress(data: Buffer) -> Result<Buffer> {
+    // Try napi framing first (0x00/0x01 flag byte)
+    if !data.is_empty() && (data[0] == 0x00 || data[0] == 0x01) {
+        return inflate_buf(&data)
+            .map(Buffer::from)
+            .map_err(Error::from_reason);
+    }
+    // Fall back to pipeline framing for L1 gn_compress output
     pipeline::decompress(&data)
         .map(Buffer::from)
         .map_err(|e: glasik_core::pipeline::PipelineError| Error::from_reason(e.to_string()))

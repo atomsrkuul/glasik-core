@@ -251,6 +251,13 @@ impl SlidingTokenizerV2 {
 
     pub fn active_entries_pub(&self) -> Vec<DictEntry> { self.active_entries() }
 
+    /// Decode raw tokenized bytes using current window vocab (no frame header)
+    pub fn decode_raw(&self, tokenized: &[u8]) -> Result<Vec<u8>, String> {
+        let active = self.active_entries();
+        if active.is_empty() { return Ok(tokenized.to_vec()); }
+        Ok(crate::tokenizer::codon::decode(tokenized, &active))
+    }
+
     /// Encode using cached Aho-Corasick automaton -- O(n) matching
     pub fn encode_ac(&mut self, buf: &[u8]) -> Vec<u8> {
         // Ensure AC is built
