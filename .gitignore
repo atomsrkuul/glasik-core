@@ -1,2 +1,5 @@
 /target
 **/*.rs.bk
+gn-node/target/
+gn-node/node_modules/
+gn-node/*.node
