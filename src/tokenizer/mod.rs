@@ -300,3 +300,5 @@ mod tests {
 }
 
 pub mod lz77_gn;
+
+pub mod hybrid_async;

@@ -134,6 +134,31 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
         out
     }
 
+    /// Tokenize using a pre-built external index (for atomic swap pattern)
+    pub fn tokenize_with_index(buf: &[u8], index: &PrefixIndex<PREFIX>, u8_only: bool) -> Vec<u8> {
+        let n = buf.len();
+        if n == 0 { return Vec::new(); }
+        let mut out: Vec<u8> = Vec::with_capacity(n * 2);
+        let mut i = 0usize;
+        while i < n {
+            if buf[i] == ESCAPE { out.push(ESCAPE); out.push(0x00); i += 1; continue; }
+            if i + PREFIX > n || i + MIN_MATCH > n { out.push(buf[i]); i += 1; continue; }
+            let key = prefix_key_at::<PREFIX>(buf, i);
+            if let Some((id, len)) = index.check_vocab(buf, i, key) {
+                if id <= 254 {
+                    out.push(ESCAPE); out.push(id as u8); i += len;
+                } else if !u8_only {
+                    out.push(ESCAPE); out.push(0xFF); out.push((id-255) as u8); i += len;
+                } else {
+                    out.push(buf[i]); i += 1;
+                }
+            } else {
+                out.push(buf[i]); i += 1;
+            }
+        }
+        out
+    }
+
     pub fn tokenize_to_gn_bytes(&self, buf: &[u8], u8_only: bool) -> Vec<u8> {
         let n = buf.len();
         if n == 0 { return Vec::new(); }
@@ -144,11 +169,15 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
             if i + PREFIX > n || i + MIN_MATCH > n { out.push(buf[i]); i += 1; continue; }
             let key = prefix_key_at::<PREFIX>(buf, i);
             if let Some((id, len)) = self.index.check_vocab(buf, i, key) {
-                if id <= 255 {
+                if id <= 254 {
+                    // 2-byte token: ESCAPE + id (1..=254)
                     out.push(ESCAPE); out.push(id as u8); i += len;
                 } else if !u8_only {
-                    out.push(ESCAPE); out.push(0xFF);
-                    out.extend_from_slice(&(id as u16).to_le_bytes()); i += len;
+                    // 3-byte extended token: ESCAPE + 0xFF + (id-255) as u8
+                    // Supports IDs 255..509 (255 more patterns at 3-byte cost)
+                    // Only use if pattern is long enough to benefit (len >= 4 saves >= 1 byte)
+                    let ext_id = (id - 255) as u8;
+                    out.push(ESCAPE); out.push(0xFF); out.push(ext_id); i += len;
                 } else {
                     out.push(buf[i]); i += 1;
                 }
@@ -250,13 +279,14 @@ pub fn decode_gn_bytes(encoded: &[u8], entries: &[DictEntry]) -> Vec<u8> {
             out.push(ESCAPE);
             i += 2;
         } else if next == 0xFF {
-            // u16 token ID
-            if i + 3 >= encoded.len() { break; }
-            let id = u16::from_le_bytes([encoded[i+2], encoded[i+3]]) as usize;
+            // 3-byte extended token: ESCAPE + 0xFF + ext_id
+            // ID = ext_id + 255
+            if i + 2 >= encoded.len() { break; }
+            let id = (encoded[i+2] as usize) + 255;
             if id > 0 && id <= entries.len() {
                 out.extend_from_slice(&entries[id-1].bytes);
             }
-            i += 4;
+            i += 3;
         } else {
             // u8 token ID
             let id = next as usize;
@@ -301,4 +331,140 @@ mod tests {
         let gn = tok.tokenize_to_gn_bytes(b"abc", true);
         assert_eq!(gn, b"abc");
     }
+}
+
+/// Hybrid encoder: GN vocab lookup + LZ77 intra-buffer matching
+/// Single pass, greedy longest match from either source
+pub struct GNHybridEncoder<const PREFIX: usize> {
+    /// Domain vocabulary (pre-trained patterns)
+    pub vocab: GNPrefixTokenizer<PREFIX>,
+    /// LZ77 hash table for intra-buffer matches
+    head: Vec<i32>,   // prefix3 hash -> most recent position in current buffer
+    prev: Vec<i32>,   // position -> previous position with same hash
+}
+
+const LZ_HASH_SIZE: usize = 1 << 13; // 8192 -- fits in L1 cache
+const LZ_HASH_MASK: usize = LZ_HASH_SIZE - 1;
+const LZ_MAX_DIST: usize = 1200;   // max lookback = full chunk
+const LZ_MAX_CHAIN: usize = 16;    // max chain depth
+
+impl<const PREFIX: usize> GNHybridEncoder<PREFIX> {
+    pub fn new() -> Self {
+        GNHybridEncoder {
+            vocab: GNPrefixTokenizer::new(),
+            head: vec![-1i32; LZ_HASH_SIZE],
+            prev: vec![-1i32; LZ_MAX_DIST],
+        }
+    }
+
+    pub fn seed_vocab(&mut self, entries: &[DictEntry]) {
+        self.vocab.seed_from_vocab(entries);
+    }
+
+    /// Reset LZ77 state for new buffer (each chunk is independent)
+    fn reset_lz(&mut self) {
+        for h in &mut self.head { *h = -1; }
+    }
+
+    #[inline]
+    fn lz_hash(buf: &[u8], i: usize) -> usize {
+        let v = (buf[i] as usize)
+              | ((buf[i+1] as usize) << 5)
+              | ((buf[i+2] as usize) << 10);
+        (v.wrapping_mul(0x9E3779B9)) >> (32 - 13) & LZ_HASH_MASK
+    }
+
+    #[inline]
+    fn lz_insert(&mut self, buf: &[u8], i: usize) {
+        if i + 3 > buf.len() { return; }
+        let h = Self::lz_hash(buf, i);
+        let slot = i % LZ_MAX_DIST;
+        self.prev[slot] = self.head[h];
+        self.head[h] = i as i32;
+    }
+
+    /// Find best LZ77 back-reference at position i
+    fn lz_find(&self, buf: &[u8], i: usize) -> Option<(usize, usize)> {
+        let n = buf.len();
+        if i + 4 > n { return None; }
+        let h = Self::lz_hash(buf, i);
+        let mut p = self.head[h];
+        let mut best_len = 3usize; // minimum LZ match
+        let mut best_dist = 0usize;
+        let mut depth = 0;
+
+        while p >= 0 && depth < LZ_MAX_CHAIN {
+            let j = p as usize;
+            let dist = i - j;
+            if dist == 0 || dist > LZ_MAX_DIST { break; }
+
+            // Count matching bytes
+            let max_len = (n - i).min(MAX_MATCH);
+            let mut len = 0;
+            while len < max_len && buf[i + len] == buf[j + len] {
+                len += 1;
+            }
+            if len > best_len {
+                best_len = len;
+                best_dist = dist;
+                if best_len >= MAX_MATCH { break; }
+            }
+            p = self.prev[j % LZ_MAX_DIST];
+            depth += 1;
+        }
+
+        if best_dist > 0 { Some((best_dist, best_len)) } else { None }
+    }
+
+    /// Hybrid tokenize: vocab first, LZ77 fallback, then literal
+    /// Returns GN bytes with vocab tokens + back-reference markers
+    pub fn encode(&mut self, buf: &[u8]) -> Vec<u8> {
+        let n = buf.len();
+        if n == 0 { return Vec::new(); }
+        self.reset_lz();
+
+        let mut out = Vec::with_capacity(n);
+        let mut i = 0usize;
+
+        while i < n {
+            if buf[i] == ESCAPE {
+                out.push(ESCAPE); out.push(0x00);
+                self.lz_insert(buf, i);
+                i += 1; continue;
+            }
+
+            // Try vocab match first (domain patterns, longer average)
+            let vocab_match = if i + PREFIX <= n && i + MIN_MATCH <= n {
+                let key = if PREFIX == 4 {
+                    u32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]])
+                } else {
+                    (buf[i] as u32) | ((buf[i+1] as u32) << 8) | ((buf[i+2] as u32) << 16)
+                };
+                self.vocab.index.check_vocab(buf, i, key)
+            } else { None };
+
+            // Vocab match only -- let deflate handle intra-buffer repetition
+            match vocab_match {
+                Some((id, vlen)) => {
+                    if id <= 254 {
+                        out.push(ESCAPE); out.push(id as u8);
+                    } else {
+                        out.push(ESCAPE); out.push(0xFF); out.push((id-255) as u8);
+                    }
+                    self.lz_insert(buf, i);
+                    i += vlen;
+                }
+                None => {
+                    out.push(buf[i]);
+                    self.lz_insert(buf, i);
+                    i += 1;
+                }
+            }
+        }
+        out
+    }
+}
+
+impl<const PREFIX: usize> Default for GNHybridEncoder<PREFIX> {
+    fn default() -> Self { Self::new() }
 }

@@ -169,6 +169,10 @@ impl GlasikSlidingV2 {
             inner: crate::tokenizer::sliding_v2::SlidingTokenizerV2::new(),
         }
     }
+    fn ingest_fast(&mut self, data: &[u8]) {
+        self.inner.ingest_fast(data);
+    }
+
 
     fn compress(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
         use flate2::{write::DeflateEncoder, Compression};
@@ -258,6 +262,10 @@ impl GlasikSlidingL4 {
         }
     }
 
+    fn ingest_fast(&mut self, data: &[u8]) {
+        self.inner.ingest_fast(data);
+    }
+
     fn compress(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
         use flate2::{write::DeflateEncoder, Compression};
         use std::io::Write;
@@ -300,6 +308,61 @@ fn gn_compress_parallel(py: Python, chunks: Vec<Vec<u8>>) -> PyResult<Py<PyList>
     Ok(list.into())
 }
 
+
+#[pyclass]
+pub struct GNHybridEncoder {
+    inner: crate::tokenizer::lz77_gn::GNHybridEncoder<4>,
+}
+
+#[pymethods]
+impl GNHybridEncoder {
+    #[new]
+    fn new() -> Self {
+        GNHybridEncoder { inner: crate::tokenizer::lz77_gn::GNHybridEncoder::new() }
+    }
+
+    fn seed_vocab(&mut self, entries: Vec<(Vec<u8>, usize, usize)>) {
+        let dict: Vec<crate::tokenizer::dictionary::DictEntry> = entries.into_iter()
+            .map(|(bytes, freq, saving)| crate::tokenizer::dictionary::DictEntry { bytes, freq, saving })
+            .collect();
+        self.inner.seed_vocab(&dict);
+    }
+
+    fn encode(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        use pyo3::exceptions::PyRuntimeError;
+        let tokenized = self.inner.encode(data);
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
+        Ok(PyBytes::new(py, &out).into())
+    }
+}
+
+#[pyclass]
+pub struct GNHybridAsync {
+    inner: crate::tokenizer::hybrid_async::HybridAsyncEncoder,
+}
+
+#[pymethods]
+impl GNHybridAsync {
+    #[new]
+    fn new() -> Self {
+        GNHybridAsync { inner: crate::tokenizer::hybrid_async::HybridAsyncEncoder::new() }
+    }
+
+    fn encode(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        let out = self.inner.encode(data);
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn stats(&self) -> (usize, u64, u64) {
+        self.inner.stats()
+    }
+}
+
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
@@ -316,6 +379,8 @@ fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_ans_decompress_o1, m)?)?;
     m.add_class::<GlasikSlidingV2>()?;
     m.add_class::<GlasikSlidingL4>()?;
+    m.add_class::<GNHybridEncoder>()?;
+    m.add_class::<GNHybridAsync>()?;
     m.add_function(wrap_pyfunction!(gn_compress_parallel, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
