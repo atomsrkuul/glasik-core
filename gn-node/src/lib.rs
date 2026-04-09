@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use tokio::sync::{mpsc, oneshot};
 
 enum Job {
+    CompressHybrid { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     RefreshVocab { resp: oneshot::Sender<usize> },
@@ -24,6 +25,36 @@ enum Job {
 
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
 static FAST_TOK: OnceLock<std::sync::Mutex<GNPrefixTokenizer<4>>> = OnceLock::new();
+static HYBRID_ENC: OnceLock<std::sync::Mutex<glasik_core::tokenizer::hybrid_async::HybridAsyncEncoder>> = OnceLock::new();
+
+// Thread-local GNHybridEncoder -- fastest path, no locks
+use std::cell::RefCell;
+thread_local! {
+    static TL_HYBRID: RefCell<Option<glasik_core::tokenizer::lz77_gn::GNPrefixTokenizer<4>>> = RefCell::new(None);
+}
+
+fn with_tl_hybrid<F, R>(f: F) -> R
+where F: FnOnce(&mut glasik_core::tokenizer::lz77_gn::GNPrefixTokenizer<4>) -> R {
+    TL_HYBRID.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if opt.is_none() {
+            let entries = glasik_core::static_dict::load_static_dict();
+            let dict: Vec<glasik_core::tokenizer::dictionary::DictEntry> = entries.iter().map(|(b,f,s)|
+                glasik_core::tokenizer::dictionary::DictEntry { bytes: b.clone(), freq: *f as usize, saving: *s as usize }
+            ).collect();
+            let mut tok = glasik_core::tokenizer::lz77_gn::GNPrefixTokenizer::<4>::new();
+            tok.seed_from_vocab(&dict);
+            *opt = Some(tok);
+        }
+        f(opt.as_mut().unwrap())
+    })
+}
+
+fn get_hybrid() -> &'static std::sync::Mutex<glasik_core::tokenizer::hybrid_async::HybridAsyncEncoder> {
+    HYBRID_ENC.get_or_init(|| {
+        std::sync::Mutex::new(glasik_core::tokenizer::hybrid_async::HybridAsyncEncoder::new())
+    })
+}
 
 fn get_fast_tok() -> &'static std::sync::Mutex<GNPrefixTokenizer<4>> {
     FAST_TOK.get_or_init(|| {
@@ -57,6 +88,8 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
     WORKER.get_or_init(|| {
         let (tx, mut rx) = mpsc::channel::<Job>(256);
         tokio::spawn(async move {
+            // Hybrid async encoder with adaptive vocab swap
+            let mut hybrid = glasik_core::tokenizer::hybrid_async::HybridAsyncEncoder::new();
             let static_entries = static_dict::load_static_dict();
             // Build GNPrefixTokenizer from static dict for fast O(n) compression
             let dict_entries: Vec<DictEntry> = static_entries.iter().map(|(b,f,s)| DictEntry {
@@ -84,8 +117,11 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
             }
             while let Some(job) = rx.recv().await {
                 match job {
+                    Job::CompressHybrid { data, resp } => {
+                        // Hybrid: learns + encodes, adaptive vocab swap
+                        let _ = resp.send(hybrid.encode(&data));
+                    }
                     Job::CompressFast { data, resp } => {
-                        // O(n) single pass -- no window update
                         let _ = resp.send(compress_lz77gn(&data, &tok4));
                     }
                     Job::CompressL2 { data, resp } => {
@@ -177,6 +213,29 @@ pub fn gn_compress(data: Buffer) -> Buffer {
 /// Sync fast compression -- O(n) single pass, no channel overhead
 /// Use gnRefreshVocab() after warming L2 window for best ratio
 #[napi]
+pub fn gn_hybrid_rebuild() -> u32 {
+    let mut enc = get_hybrid().lock().unwrap();
+    enc.maybe_rebuild();
+    let (entries, _, gen) = enc.stats();
+    gen as u32
+}
+
+#[napi]
+pub fn gn_compress_tl(data: Buffer) -> Buffer {
+    // Thread-local tokenizer: zero mutex, zero arc-swap, zero contention
+    with_tl_hybrid(|tok| {
+        let tokenized = tok.tokenize_to_gn_bytes(&data, true);
+        Buffer::from(deflate_buf(tokenized))
+    })
+}
+
+#[napi]
+pub fn gn_compress_hybrid_sync(data: Buffer) -> Buffer {
+    let mut enc = get_hybrid().lock().unwrap();
+    Buffer::from(enc.encode(&data))
+}
+
+#[napi]
 pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
     let mut tok = get_fast_tok().lock().unwrap();
     let tokenized = tok.tokenize_to_gn_bytes(&data, true);  // u8 mode: top 254 entries
@@ -224,6 +283,13 @@ pub async fn gn_refresh_vocab() -> Result<u32> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::RefreshVocab { resp: tx }, rx).await
         .map(|n| n as u32)
+}
+
+#[napi]
+pub async fn gn_compress_hybrid(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressHybrid { data: data.to_vec(), resp: tx }, rx).await
+        .map(Buffer::from)
 }
 
 #[napi]

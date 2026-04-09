@@ -20,6 +20,7 @@ pub struct VocabSnapshot {
 pub struct HybridAsyncEncoder {
     vocab: Arc<ArcSwap<VocabSnapshot>>,
     window: SlidingTokenizerV2,
+    compressor: libdeflater::Compressor,
     chunks_since_rebuild: u64,
     total_chunks: u64,
     generation: u64,
@@ -39,6 +40,7 @@ impl HybridAsyncEncoder {
         let window = SlidingTokenizerV2::new_with_static(static_entries);
         HybridAsyncEncoder {
             vocab: snapshot, window,
+            compressor: libdeflater::Compressor::new(libdeflater::CompressionLvl::default()),
             chunks_since_rebuild: 0,
             total_chunks: 0,
             generation: 0,
@@ -66,10 +68,14 @@ impl HybridAsyncEncoder {
     }
 
     pub fn encode(&mut self, buf: &[u8]) -> Vec<u8> {
-        // Learn
-        self.window.ingest_fast(buf);
-        self.chunks_since_rebuild += 1;
         self.total_chunks += 1;
+        self.chunks_since_rebuild += 1;
+
+        // Learn every 4th chunk -- amortizes ingest_fast cost
+        // ingest_fast = 0.9ms, amortized over 4 = 0.225ms overhead
+        if self.total_chunks % 4 == 0 {
+            self.window.ingest_fast(buf);
+        }
 
         // Adaptive rebuild
         if self.chunks_since_rebuild >= self.rebuild_interval() {
@@ -80,13 +86,19 @@ impl HybridAsyncEncoder {
         let snap = self.vocab.load();
         let tokenized = GNPrefixTokenizer::<4>::tokenize_with_index(buf, &snap.index, true);
 
-        // Deflate
-        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
-        let max = comp.deflate_compress_bound(tokenized.len());
+        // Deflate using stored compressor (no allocation per call)
+        let max = self.compressor.deflate_compress_bound(tokenized.len());
         let mut deflated = vec![0u8; max];
-        match comp.deflate_compress(&tokenized, &mut deflated) {
+        match self.compressor.deflate_compress(&tokenized, &mut deflated) {
             Ok(n) => { deflated.truncate(n); if deflated.len() < tokenized.len() { deflated } else { tokenized } }
             Err(_) => tokenized
+        }
+    }
+
+    /// Trigger vocab rebuild -- call from background thread or periodically
+    pub fn maybe_rebuild(&mut self) {
+        if self.chunks_since_rebuild >= self.rebuild_interval() {
+            self.rebuild_vocab();
         }
     }
 
