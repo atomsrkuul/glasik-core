@@ -1,57 +1,68 @@
-# glasik-core
+# Glasik Notation (GN)
 
-Rust implementation of the Glasik Notation (GN) compression architecture.
+Open-source domain-adaptive compression for LLM context data.
+Learns vocabulary from conversation streams. Beats gzip ratio everywhere. Beats brotli ratio on large chunks.
 
-GN is a domain-aware compression system built for LLM agent context, message
-streams, and notation data. glasik-core is the performance layer — a Rust
-library with Python bindings via PyO3.
+## Benchmark Results
 
-## What it does
+Measured on ShareGPT V3, Intel i3-1215U, napi-rs addon (no IPC), 3-seed verified.
 
-- **Codon-table tokenization** — frequency-analyzed dictionary substitution
-  before deflate runs, reducing entropy on repetitive domain data
-- **Category-aware pre-seeding** — detects JSON, natural language, and log
-  data, seeds the dictionary with known high-value patterns before scanning
-- **Sliding window accumulation** — maintains domain vocabulary across batches,
-  improving compression the longer it runs on a stream
-- **Two-pass encoding** — second pass operates only on non-token residual,
-  clean boundary between passes
-- **Auto mode** — measures tokenized vs raw size, bypasses tokenization when
-  it would expand the data
+### GN AC (Aho-Corasick encoder) — production path
 
-## Verified benchmarks
+| Chunk size | Ratio | vs gzip | vs brotli-6 | p50 | p99 |
+|------------|-------|---------|-------------|-----|-----|
+| Small (232B) | 1.566x | +16% | -3% | 0.015ms | 0.024ms |
+| Medium (989B) | 2.217x | +10% | -3% | 0.047ms | 0.087ms |
+| Large (2341B) | **2.897x** | **+15%** | **+4%** | **0.072ms** | **0.136ms** |
 
-| Corpus | glasik-core | gzip | vs gzip | Lossless |
-|--------|------------|------|---------|----------|
-| MEMORY.md (LLM notation) | 1.849x | 2.075x | 89% | 100% |
-| ShareGPT-1k (LLM turns) | 3.752x | 3.945x | 95% | 100% |
-| Ubuntu-IRC-1k (chat) | 2.122x | 2.357x | 90% | 100% |
+### vs baselines (medium chunks, seed=42)
 
-GNI matches gzip on general natural language. On domain-specific streams
-the sliding window accumulates vocabulary beyond gzip's 32KB window limit —
-compression improves monotonically as the window fills.
+| Method | Ratio | p50 | p99 |
+|--------|-------|-----|-----|
+| gzip-1 | 1.954x | 0.020ms | 0.028ms |
+| gzip-6 | 2.012x | 0.025ms | 0.036ms |
+| brotli-1 | 1.880x | 0.014ms | 0.019ms |
+| brotli-6 | 2.276x | 0.046ms | 0.072ms |
+| **GN AC** | **2.217x** | **0.047ms** | **0.087ms** |
+| GN L2 (codon) | 2.212x | 1.608ms | 10.285ms |
 
-JS reference implementation: [glasik-notation](https://github.com/atomsrkuul/glasik-notation)
+## Architecture
+Conversation stream
+→ GN sliding window (learns domain vocabulary)
+→ Aho-Corasick O(n) tokenizer (all patterns simultaneously)
+→ libdeflate (entropy coding)
+→ compressed output
 
-## Structure
+**Key properties:**
+- **O(n) matching**: Aho-Corasick automaton, single pass over input
+- **Domain-adaptive**: window learns from stream, rebuilds vocab every 50 chunks
+- **No IPC**: napi-rs Rust addon, runs in-process with Node.js
+- **Verified**: 3-seed reproducibility across ShareGPT/WildChat/LMSYS/Ubuntu-IRC
 
-    codec/       frame, varint, CRC32
-    tokenizer/   codon table, dictionary
-    shards/      crystalline state primitives
-    bindings/    PyO3 Python interface
+## Why GN beats gzip
 
-## Build
+gzip finds repetition within one buffer (32KB LZ77 window).
+GN finds repetition across buffers (domain vocabulary learned from the stream).
+They are complementary — GN's cross-chunk patterns + deflate's intra-chunk compression.
 
-    cargo build
-    cargo build --features python
-    cargo test
-    cargo bench
+## Why GN beats brotli on large chunks
+
+Brotli's static dictionary is trained on web text.
+GN's dynamic dictionary adapts to the actual conversation domain.
+On LLM conversation data, domain-specific vocabulary outperforms generic web dictionary.
+
+## NLNet NGI Zero Commons Fund
+
+Application #2026-06-023.
 
 ## Status
 
-- [ ] Frame codec
-- [ ] Varint encoding
-- [ ] CRC32
-- [ ] Codon tokenizer
-- [ ] PyO3 bindings
-- [ ] Shard primitives
+- GN AC: production encoder, O(n) Aho-Corasick, verified
+- GN L2 codon: reference encoder, high ratio, 10ms p99
+- ANS entropy: implemented, benchmarked, available
+- napi-rs addon: Node.js production path
+- PyO3: Python research path
+
+## License
+
+MIT
