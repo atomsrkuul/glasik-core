@@ -18,55 +18,129 @@ pub const ESCAPE: u8 = 0x01;
 
 /// First-byte index: maps first byte of each pattern to candidate list.
 /// First-byte index: maps first byte of each pattern to candidate list.
+#[derive(Debug, Clone)]
+struct PatternRec {
+    prefix4: u32,
+    token_id: u8,
+    bytes: Vec<u8>,
+    next: i32,
+}
+
 #[derive(Debug)]
 pub struct FirstByteIndex {
-    buckets: Vec<Vec<(Vec<u8>, u8)>>,
+    mask: usize,
+    keys: Vec<u32>,
+    heads: Vec<i32>,
+    used: Vec<u8>,
+    patterns: Vec<PatternRec>,
 }
+
 impl FirstByteIndex {
     pub fn build(entries: &[DictEntry]) -> Self {
-        let mut buckets: Vec<Vec<(Vec<u8>, u8)>> = vec![Vec::new(); 256];
-        for (id, entry) in entries.iter().enumerate() {
-            if entry.bytes.is_empty() { continue; }
-            let first = entry.bytes[0] as usize;
-            buckets[first].push((entry.bytes.clone(), (id + 1) as u8));
+        let mut pats: Vec<(u32, u8, Vec<u8>)> = Vec::with_capacity(entries.len());
+        for (id0, entry) in entries.iter().enumerate() {
+            let b = entry.bytes.as_slice();
+            if b.len() < 4 { continue; }
+            // token_id wraps at u8 -- collision for entries >254 but top entries stay unique
+            let token_id = ((id0 + 1) & 0xFF) as u8;
+            if token_id == 0 { continue; } // skip if wrapped to reserved 0
+            let prefix4 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+            pats.push((prefix4, token_id, entry.bytes.clone()));
         }
-        for bucket in &mut buckets {
-            bucket.sort_unstable_by(|a, b| b.0.len().cmp(&a.0.len()));
-        }
-        FirstByteIndex { buckets }
-    }
-    pub fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
-        // Build byte presence mask -- O(n) once, then O(1) per pattern pre-filter
-        let mut present = [false; 256];
-        for &b in buf { present[b as usize] = true; }
+        // Sort descending by length so longer patterns are at head of chain (checked first)
+        pats.sort_unstable_by(|a, b| b.2.len().cmp(&a.2.len()));
 
-        let mut matches: Vec<(usize, u8, usize)> = Vec::new();
-        for (bi, bucket) in self.buckets.iter().enumerate() {
-            // Skip entire bucket if first byte not in buffer
-            if !present[bi] { continue; }
-            for (pattern, token_id) in bucket {
-                if pattern.is_empty() || pattern.len() > buf.len() { continue; }
-                if pattern.len() > 1 && !present[pattern[1] as usize] { continue; }
-                let finder = memchr::memmem::Finder::new(pattern.as_slice());
-                let mut start = 0;
-                while start + pattern.len() <= buf.len() {
-                    if let Some(rel) = finder.find(&buf[start..]) {
-                        let pos = start + rel;
-                        if buf[pos] != ESCAPE {
-                            matches.push((pos, *token_id, pattern.len()));
-                        }
-                        start = pos + pattern.len();
-                    } else { break; }
-                }
-            }
+        let n = pats.len().max(1);
+        let cap = (n * 2).next_power_of_two().max(1024);
+        let mask = cap - 1;
+        let mut keys = vec![0u32; cap];
+        let mut heads = vec![-1i32; cap];
+        let mut used = vec![0u8; cap];
+        let mut patterns: Vec<PatternRec> = Vec::with_capacity(n);
+
+        for (prefix4, token_id, bytes) in pats {
+            let idx = patterns.len() as i32;
+            let slot = Self::find_slot_insert(prefix4, mask, &mut keys, &mut used);
+            let old_head = heads[slot];
+            heads[slot] = idx;
+            patterns.push(PatternRec { prefix4, token_id, bytes, next: old_head });
         }
-        matches.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.2.cmp(&a.2)));
-        matches
+
+        Self { mask, keys, heads, used, patterns }
+    }
+
+    pub fn find_matches(&self, buf: &[u8]) -> Vec<(usize, u8, usize)> {
+        let n = buf.len();
+        if n < 4 || self.patterns.is_empty() { return Vec::new(); }
+
+        let mut out: Vec<(usize, u8, usize)> = Vec::with_capacity(n / 4);
+        let mut i = 0usize;
+
+        while i + 4 <= n {
+            if buf[i] == ESCAPE { i += 1; continue; }
+
+            let prefix4 = u32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]);
+            let head = self.lookup(prefix4);
+            if head < 0 { i += 1; continue; }
+
+            // Find longest match at this position
+            let mut best_len = 0usize;
+            let mut best_tok = 0u8;
+            let mut p = head;
+
+            while p >= 0 {
+                let rec = &self.patterns[p as usize];
+                let len = rec.bytes.len();
+                if len > best_len && i + len <= n && buf[i..i+len] == *rec.bytes {
+                    best_len = len;
+                    best_tok = rec.token_id;
+                    if best_len >= 128 { break; }
+                }
+                p = rec.next;
+            }
+
+            if best_len >= 4 {
+                out.push((i, best_tok, best_len));
+            }
+            // Always advance by 1 -- let assembler do greedy selection
+            i += 1;
+        }
+
+        // Sort by position for assembler compatibility
+        out.sort_unstable_by_key(|m| m.0);
+        out
+    }
+
+    #[inline]
+    fn hash32(x: u32) -> u32 {
+        let mut v = x.wrapping_mul(0x9E37_79B1);
+        v ^= v >> 16;
+        v = v.wrapping_mul(0x85EB_CA6B);
+        v ^= v >> 13;
+        v
+    }
+
+    #[inline]
+    fn find_slot_insert(key: u32, mask: usize, keys: &mut [u32], used: &mut [u8]) -> usize {
+        let mut slot = (Self::hash32(key) as usize) & mask;
+        loop {
+            if used[slot] == 0 { used[slot] = 1; keys[slot] = key; return slot; }
+            if keys[slot] == key { return slot; }
+            slot = (slot + 1) & mask;
+        }
+    }
+
+    #[inline]
+    fn lookup(&self, key: u32) -> i32 {
+        let mut slot = (Self::hash32(key) as usize) & self.mask;
+        loop {
+            if self.used[slot] == 0 { return -1; }
+            if self.keys[slot] == key { return self.heads[slot]; }
+            slot = (slot + 1) & self.mask;
+        }
     }
 }
 
-/// Encode: substitute dictionary entries with 2-byte codon tokens.
-/// Returns tokenized buffer. Prepends no header -- caller handles framing.
 pub fn assemble_from_matches(buf: &[u8], matches: &[(usize, u8, usize)]) -> Vec<u8> {
     if matches.is_empty() {
         return escape_only(buf);
