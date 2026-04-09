@@ -6,11 +6,11 @@
 use ahash::AHashMap;
 
 pub const MIN_STR_LEN: usize = 4;
-pub const MAX_STR_LEN: usize = 128;
+pub const MAX_STR_LEN: usize = 32;
 pub const MIN_FREQ: usize = 3;
 pub const MAX_ENTRIES: usize = 200;
 pub const TOKEN_BYTES: usize = 2;
-pub const MAX_LENGTHS: usize = 24;
+pub const MAX_LENGTHS: usize = 6;
 
 const BASE: u64 = 131;
 const MOD: u64 = (1 << 61) - 1;

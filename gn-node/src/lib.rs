@@ -221,6 +221,15 @@ pub fn gn_hybrid_rebuild() -> u32 {
 }
 
 #[napi]
+pub fn gn_compress_local(data: Buffer) -> Buffer {
+    // Same as fast sync -- local repeat deprecated (overhead > savings)
+    with_tl_hybrid(|tok| {
+        let tokenized = tok.tokenize_to_gn_bytes(&data, true);
+        Buffer::from(deflate_buf(tokenized))
+    })
+}
+
+#[napi]
 pub fn gn_compress_tl(data: Buffer) -> Buffer {
     // Thread-local tokenizer: zero mutex, zero arc-swap, zero contention
     with_tl_hybrid(|tok| {

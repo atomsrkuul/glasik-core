@@ -103,7 +103,7 @@ impl<const PREFIX: usize> Default for PrefixIndex<PREFIX> {
 
 #[derive(Debug)]
 pub struct GNPrefixTokenizer<const PREFIX: usize> {
-    index: PrefixIndex<PREFIX>,
+    pub index: PrefixIndex<PREFIX>,
 }
 
 impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
@@ -155,6 +155,60 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
             } else {
                 out.push(buf[i]); i += 1;
             }
+        }
+        out
+    }
+
+    /// Tokenize with local repeat detection (cheap intra-buffer LZ77)
+    /// Scans back up to 64 bytes for 4-byte matches -- O(n*64) worst case
+    /// but very cache-friendly and fast in practice
+    pub fn tokenize_with_local(buf: &[u8], index: &PrefixIndex<PREFIX>, u8_only: bool) -> Vec<u8> {
+        let n = buf.len();
+        if n == 0 { return Vec::new(); }
+        let mut out: Vec<u8> = Vec::with_capacity(n * 2);
+        let mut i = 0usize;
+        while i < n {
+            if buf[i] == ESCAPE { out.push(ESCAPE); out.push(0x00); i += 1; continue; }
+            if i + PREFIX > n || i + MIN_MATCH > n { out.push(buf[i]); i += 1; continue; }
+
+            // Try vocab match first
+            let key = prefix_key_at::<PREFIX>(buf, i);
+            if let Some((id, len)) = index.check_vocab(buf, i, key) {
+                if id <= 254 {
+                    out.push(ESCAPE); out.push(id as u8); i += len; continue;
+                } else if !u8_only {
+                    out.push(ESCAPE); out.push(0xFF); out.push((id-255) as u8); i += len; continue;
+                }
+            }
+
+            // Try local repeat: scan back up to 64 bytes
+            if i >= MIN_MATCH {
+                let lookback = i.min(64);
+                let mut best_len = 0usize;
+                let mut best_dist = 0usize;
+                for d in 1..=lookback {
+                    let j = i - d;
+                    if buf[j] != buf[i] { continue; }
+                    let mut len = 0;
+                    while i+len < n && j+len < i && buf[i+len] == buf[j+len] && len < MAX_MATCH {
+                        len += 1;
+                    }
+                    if len >= MIN_MATCH && len > best_len {
+                        best_len = len;
+                        best_dist = d;
+                    }
+                }
+                if best_len >= MIN_MATCH && best_dist <= 255 {
+                    // Encode local repeat: ESCAPE + 0xFD + dist(u8) + len(u8)
+                    out.push(ESCAPE); out.push(0xFD);
+                    out.push(best_dist as u8);
+                    out.push(best_len as u8);
+                    i += best_len;
+                    continue;
+                }
+            }
+
+            out.push(buf[i]); i += 1;
         }
         out
     }

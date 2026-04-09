@@ -31,6 +31,10 @@ impl SlidingTokenizerL4 {
         }
     }
 
+    pub fn ingest_fast(&mut self, buf: &[u8]) {
+        self.inner.ingest_fast(buf);
+    }
+
     pub fn encode(&mut self, buf: &[u8]) -> Vec<u8> {
         let result = self.inner.encode(buf);
         let (_, batch_count) = self.inner.stats();
