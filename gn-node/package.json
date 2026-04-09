@@ -1,0 +1,18 @@
+{
+  "name": "gn-native",
+  "version": "0.1.0",
+  "main": "index.js",
+  "napi": {
+    "name": "gn-native",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "latest"
+  }
+}
