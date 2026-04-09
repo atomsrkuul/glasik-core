@@ -7,7 +7,7 @@
 //! This eliminates the ~2KB per-frame dict overhead that made v1
 //! net-negative on short chunks.
 
-use crate::tokenizer::codon::{decode as codon_decode, encode as codon_encode, FirstByteIndex};
+use crate::tokenizer::codon::{decode as codon_decode, encode as codon_encode, encode_with_index as codon_encode_with_index, FirstByteIndex};
 use crate::tokenizer::dictionary::{build, DictEntry};
 use ahash::AHashMap as HashMap;
 
@@ -32,7 +32,9 @@ pub struct SlidingTokenizerV2 {
     index: HashMap<Vec<u8>, usize>,
     cached_index: Option<FirstByteIndex>,
     cached_entries: Vec<crate::tokenizer::dictionary::DictEntry>,
+    cached_ac: Option<aho_corasick::AhoCorasick>,
     index_dirty: bool,
+    ac_dirty: bool,
 }
 
 impl SlidingTokenizerV2 {
@@ -44,28 +46,44 @@ impl SlidingTokenizerV2 {
             index: HashMap::new(),
             cached_index: None,
             cached_entries: Vec::new(),
+            cached_ac: None,
             index_dirty: true,
+            ac_dirty: true,
         }
     }
 
     /// Encode a buffer. Dictionary NOT included in output.
     /// Caller must ensure decoder has matching dict_version.
+    /// Fast ingest: update window statistics without encoding
+    /// Use to warm the model on prior context without paying encode cost
+    pub fn ingest_fast(&mut self, buf: &[u8]) {
+        let batch_entries = build(buf);
+        let changed = self.update_window(&batch_entries);
+        self.evict();
+        self.batch_count += 1;
+        if changed {
+            self.dict_version = self.dict_version.wrapping_add(1);
+            self.index_dirty = self.batch_count % 10 == 0;
+        }
+    }
+
     pub fn encode(&mut self, buf: &[u8]) -> Vec<u8> {
         self.batch_count += 1;
         let batch_entries = build(buf);
         let changed = self.update_window(&batch_entries);
-        self.evict();
+        if self.batch_count % 100 == 0 { self.evict(); }
         if changed {
             self.dict_version = self.dict_version.wrapping_add(1);
+            self.index_dirty = true;
+            if self.batch_count % 50 == 0 { self.ac_dirty = true; }
         }
 
-        let active = self.active_entries();
-        let tokenized = if active.is_empty() {
+        let tokenized = if self.window.is_empty() {
             buf.to_vec()
         } else {
-            codon_encode(buf, &active)
+            let index = self.get_index();
+            codon_encode_with_index(buf, index)
         };
-
         // Frame: GNSL + dict_version(4) + orig_len(4) + payload
         let mut out = Vec::with_capacity(12 + tokenized.len());
         out.extend_from_slice(SLIDING_MAGIC);
@@ -175,7 +193,10 @@ impl SlidingTokenizerV2 {
                 }
             }
         }
-        if changed { self.index_dirty = true; }
+        if changed {
+            self.index_dirty = true;
+            // Only invalidate AC every 50 batches to amortize rebuild cost
+        }
         changed
     }
 
@@ -195,6 +216,7 @@ impl SlidingTokenizerV2 {
             self.index.insert(e.bytes.clone(), i);
         }
         self.index_dirty = true;
+        self.ac_dirty = true;
     }
 
     fn worst_entry(&self, min_value: u64) -> Option<usize> {
@@ -217,9 +239,28 @@ impl SlidingTokenizerV2 {
                 saving: e.saving as usize,
             }).collect();
             self.cached_index = Some(FirstByteIndex::build(&self.cached_entries));
+            self.cached_index = Some(FirstByteIndex::build(&self.cached_entries));
+            if self.ac_dirty {
+                self.cached_ac = crate::tokenizer::codon::build_ac(&self.cached_entries);
+                self.ac_dirty = false;
+            }
             self.index_dirty = false;
         }
         self.cached_index.as_ref().unwrap()
+    }
+
+    pub fn active_entries_pub(&self) -> Vec<DictEntry> { self.active_entries() }
+
+    /// Encode using cached Aho-Corasick automaton -- O(n) matching
+    pub fn encode_ac(&mut self, buf: &[u8]) -> Vec<u8> {
+        // Ensure AC is built
+        let _ = self.get_index();
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::encode_ac_with(buf, ac)
+        } else {
+            let active = self.active_entries();
+            crate::tokenizer::codon::encode_ac(buf, &active)
+        }
     }
 
     fn active_entries(&self) -> Vec<DictEntry> {
@@ -251,8 +292,10 @@ impl SlidingTokenizerV2 {
                 saving,
             });
         }
-        tok.dict_version = 1; // static dict = version 1
+        tok.dict_version = 1;
         tok.index_dirty = true;
+        tok.ac_dirty = true;
+        tok.cached_ac = None;
         tok
     }
 

@@ -173,6 +173,42 @@ impl GlasikSlidingV2 {
         self.inner.ingest_fast(data);
     }
 
+    fn encode_ac_raw(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        let tokenized = self.inner.encode_ac(data);
+        Ok(PyBytes::new(py, &tokenized).into())
+    }
+
+    fn compress_ac_cached(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        use pyo3::exceptions::PyRuntimeError;
+        let tokenized = self.inner.encode_ac(data);
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn compress_ac(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        use pyo3::exceptions::PyRuntimeError;
+        let active = self.inner.active_entries_pub();
+        let tokenized = crate::tokenizer::codon::encode_ac(data, &active);
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn encode_raw(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        // Returns raw tokenized bytes BEFORE deflate -- for analysis only
+        let tokenized = self.inner.encode(data);
+        Ok(PyBytes::new(py, &tokenized).into())
+    }
+
 
     fn compress(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
         use flate2::{write::DeflateEncoder, Compression};

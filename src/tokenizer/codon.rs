@@ -73,11 +73,22 @@ impl FirstByteIndex {
         let n = buf.len();
         if n < 4 || self.patterns.is_empty() { return Vec::new(); }
 
+        // Build first-byte presence set -- skip positions where first byte
+        // cannot start any pattern (O(1) check saves hash lookup)
+        let mut first_byte_present = [false; 256];
+        for p in &self.patterns {
+            if !p.bytes.is_empty() {
+                first_byte_present[p.bytes[0] as usize] = true;
+            }
+        }
+
         let mut out: Vec<(usize, u8, usize)> = Vec::with_capacity(n / 4);
         let mut i = 0usize;
 
         while i + 4 <= n {
-            if buf[i] == ESCAPE { i += 1; continue; }
+            if buf[i] == ESCAPE || !first_byte_present[buf[i] as usize] {
+                i += 1; continue;
+            }
 
             let prefix4 = u32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]);
             let head = self.lookup(prefix4);
@@ -197,6 +208,12 @@ pub fn encode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
         return escape_only(buf);
     }
     let index = FirstByteIndex::build(entries);
+    let matches = index.find_matches(buf);
+    assemble_from_matches(buf, &matches)
+}
+
+/// Encode using a pre-built index -- avoids rebuild on every call
+pub fn encode_with_index(buf: &[u8], index: &FirstByteIndex) -> Vec<u8> {
     let matches = index.find_matches(buf);
     assemble_from_matches(buf, &matches)
 }
@@ -325,4 +342,106 @@ mod tests {
         let dec = decode(&enc, &entries);
         assert_eq!(dec, buf);
     }
+}
+
+/// Aho-Corasick based encoder -- O(n) single pass, all patterns simultaneously
+/// Uses u16 token IDs (3 bytes: ESCAPE+hi+lo) to support all window entries
+pub fn encode_ac(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
+    use aho_corasick::{AhoCorasick, MatchKind};
+
+    if entries.is_empty() { return escape_only(buf); }
+
+    // Use ALL entries sorted by saving -- u16 IDs support up to 65535 patterns
+    let mut sorted: Vec<&DictEntry> = entries.iter()
+        .filter(|e| e.bytes.len() >= 4)
+        .collect();
+    sorted.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+
+    let patterns: Vec<&[u8]> = sorted.iter().map(|e| e.bytes.as_slice()).collect();
+
+    let ac = match AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostLongest)
+        .build(&patterns) {
+        Ok(ac) => ac,
+        Err(_) => return escape_only(buf),
+    };
+
+    let mut out = Vec::with_capacity(buf.len());
+    let mut pos = 0usize;
+
+    for m in ac.find_iter(buf) {
+        // Copy literal bytes before match
+        for &b in &buf[pos..m.start()] {
+            if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
+            else { out.push(b); }
+        }
+        // Emit u16 token: ESCAPE + hi_byte + lo_byte
+        // pattern index 0 = token 1, etc.
+        let tok = (m.pattern().as_usize() + 1) as u16;
+        if tok <= 254 {
+            // Fast path: u8 token (2 bytes)
+            out.push(ESCAPE);
+            out.push(tok as u8);
+        } else {
+            // Extended: 3-byte token ESCAPE + 0xFF + (tok-255)
+            // Only profitable if pattern len > 3
+            out.push(ESCAPE);
+            out.push(0xFF);
+            out.push((tok - 255) as u8);
+        }
+        pos = m.end();
+    }
+    // Remaining literal bytes
+    for &b in &buf[pos..] {
+        if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
+        else { out.push(b); }
+    }
+    out
+}
+
+/// Encode using pre-built AC automaton -- O(n) single pass
+/// Maps all pattern IDs to u8 via wrapping (same as codon FirstByteIndex)
+/// This preserves the accidental benefit of ID collision: deflate sees
+/// repeated ESCAPE+id pairs across chunks and compresses them efficiently
+pub fn encode_ac_with(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> Vec<u8> {
+    let mut out = Vec::with_capacity(buf.len());
+    let mut pos = 0usize;
+    for m in ac.find_iter(buf) {
+        for &b in &buf[pos..m.start()] {
+            if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
+            else { out.push(b); }
+        }
+        // Wrap to u8 -- same as codon::FirstByteIndex wrapping behavior
+        // id 0 is reserved, skip it
+        let tok = ((m.pattern().as_usize() + 1) & 0xFF) as u8;
+        if tok == 0 {
+            // Wrapped to reserved 0 -- emit literals
+            for &b in &buf[m.start()..m.end()] {
+                if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
+                else { out.push(b); }
+            }
+        } else {
+            out.push(ESCAPE); out.push(tok);
+        }
+        pos = m.end();
+    }
+    for &b in &buf[pos..] {
+        if b == ESCAPE { out.push(ESCAPE); out.push(0x00); }
+        else { out.push(b); }
+    }
+    out
+}
+
+/// Build cached Aho-Corasick automaton from entries
+pub fn build_ac(entries: &[DictEntry]) -> Option<aho_corasick::AhoCorasick> {
+    use aho_corasick::{AhoCorasick, MatchKind};
+    if entries.is_empty() { return None; }
+    let mut sorted: Vec<&DictEntry> = entries.iter()
+        .filter(|e| e.bytes.len() >= 4)
+        .collect();
+    sorted.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+    let patterns: Vec<&[u8]> = sorted.iter().map(|e| e.bytes.as_slice()).collect();
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostLongest)
+        .build(&patterns).ok()
 }
