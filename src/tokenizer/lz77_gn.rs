@@ -231,6 +231,44 @@ fn find_slot_insert(key: u32, mask: usize, keys: &mut [u32], used: &mut [u8]) ->
     }
 }
 
+/// Decode GN token bytes back to original bytes
+/// Handles both u8 tokens (ESCAPE + id) and u16 tokens (ESCAPE + 0xFF + u16 LE)
+pub fn decode_gn_bytes(encoded: &[u8], entries: &[DictEntry]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(encoded.len() * 2);
+    let mut i = 0;
+    while i < encoded.len() {
+        if encoded[i] != ESCAPE {
+            out.push(encoded[i]);
+            i += 1;
+            continue;
+        }
+        // ESCAPE byte
+        if i + 1 >= encoded.len() { break; }
+        let next = encoded[i + 1];
+        if next == 0x00 {
+            // Literal ESCAPE
+            out.push(ESCAPE);
+            i += 2;
+        } else if next == 0xFF {
+            // u16 token ID
+            if i + 3 >= encoded.len() { break; }
+            let id = u16::from_le_bytes([encoded[i+2], encoded[i+3]]) as usize;
+            if id > 0 && id <= entries.len() {
+                out.extend_from_slice(&entries[id-1].bytes);
+            }
+            i += 4;
+        } else {
+            // u8 token ID
+            let id = next as usize;
+            if id > 0 && id <= entries.len() {
+                out.extend_from_slice(&entries[id-1].bytes);
+            }
+            i += 2;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -179,7 +179,7 @@ pub fn gn_compress(data: Buffer) -> Buffer {
 #[napi]
 pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
     let mut tok = get_fast_tok().lock().unwrap();
-    let tokenized = tok.tokenize_to_gn_bytes(&data, true);
+    let tokenized = tok.tokenize_to_gn_bytes(&data, true);  // u8 mode: top 254 entries
     Buffer::from(deflate_buf(tokenized))
 }
 
