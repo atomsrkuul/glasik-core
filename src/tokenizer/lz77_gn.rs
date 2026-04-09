@@ -1,0 +1,266 @@
+//! lz77_gn.rs -- GN vocabulary greedy tokenizer with prefix hash index
+//!
+//! Single-pass O(n) scan, prefix4 hash table, greedy longest match,
+//! libdeflate backend.
+
+use crate::tokenizer::dictionary::DictEntry;
+
+pub const ESCAPE: u8 = 0x01;
+pub const MIN_MATCH: usize = 4;
+pub const MAX_MATCH: usize = 128;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Token {
+    Literal(u8),
+    DictU8 { id: u8, len: u8 },
+    DictU16 { id: u16, len: u8 },
+}
+
+#[derive(Debug)]
+struct PatternRec {
+    key: u32,
+    id: u16,
+    bytes: Box<[u8]>,
+    next: i32,
+}
+
+#[derive(Debug)]
+pub struct PrefixIndex<const PREFIX: usize> {
+    mask: usize,
+    keys: Vec<u32>,
+    heads: Vec<i32>,
+    used: Vec<u8>,
+    patterns: Vec<PatternRec>,
+}
+
+impl<const PREFIX: usize> PrefixIndex<PREFIX> {
+    pub fn new() -> Self {
+        Self { mask: 0, keys: Vec::new(), heads: Vec::new(), used: Vec::new(), patterns: Vec::new() }
+    }
+
+    pub fn build(entries: &[DictEntry]) -> Self {
+        let mut pats: Vec<(u32, u16, Box<[u8]>)> = Vec::new();
+        for (i, e) in entries.iter().enumerate() {
+            let b = e.bytes.as_slice();
+            if b.len() < MIN_MATCH || b.len() > MAX_MATCH || b.len() < PREFIX { continue; }
+            let id = (i as u16).wrapping_add(1);
+            let key = prefix_key::<PREFIX>(b);
+            pats.push((key, id, b.to_vec().into_boxed_slice()));
+        }
+        // Sort ascending -- longer patterns end up at chain head after insertion
+        pats.sort_unstable_by(|a, b| a.2.len().cmp(&b.2.len()));
+
+        let n = pats.len().max(1);
+        let cap = (n * 2).next_power_of_two().max(1024);
+        let mask = cap - 1;
+        let mut keys = vec![0u32; cap];
+        let mut heads = vec![-1i32; cap];
+        let mut used = vec![0u8; cap];
+        let mut patterns: Vec<PatternRec> = Vec::with_capacity(n);
+
+        for (key, id, bytes) in pats {
+            let slot = find_slot_insert(key, mask, &mut keys, &mut used);
+            let idx = patterns.len() as i32;
+            let old_head = heads[slot];
+            heads[slot] = idx;
+            patterns.push(PatternRec { key, id, bytes, next: old_head });
+        }
+        Self { mask, keys, heads, used, patterns }
+    }
+
+    #[inline]
+    pub fn lookup_head(&self, key: u32) -> i32 {
+        if self.keys.is_empty() { return -1; }
+        let mut slot = (hash32(key) as usize) & self.mask;
+        loop {
+            if self.used[slot] == 0 { return -1; }
+            if self.keys[slot] == key { return self.heads[slot]; }
+            slot = (slot + 1) & self.mask;
+        }
+    }
+
+    #[inline]
+    pub fn check_vocab(&self, buf: &[u8], i: usize, key: u32) -> Option<(u16, usize)> {
+        let n = buf.len();
+        let mut p = self.lookup_head(key);
+        while p >= 0 {
+            let rec = unsafe { self.patterns.get_unchecked(p as usize) };
+            if rec.key == key {
+                let len = rec.bytes.len();
+                if i + len <= n && buf[i..i+len] == *rec.bytes {
+                    return Some((rec.id, len));
+                }
+            }
+            p = rec.next;
+        }
+        None
+    }
+}
+
+impl<const PREFIX: usize> Default for PrefixIndex<PREFIX> {
+    fn default() -> Self { Self::new() }
+}
+
+#[derive(Debug)]
+pub struct GNPrefixTokenizer<const PREFIX: usize> {
+    index: PrefixIndex<PREFIX>,
+}
+
+impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
+    pub fn new() -> Self { Self { index: PrefixIndex::new() } }
+
+    pub fn seed_from_vocab(&mut self, entries: &[DictEntry]) {
+        self.index = PrefixIndex::<PREFIX>::build(entries);
+    }
+
+    pub fn tokenize(&self, buf: &[u8]) -> Vec<Token> {
+        let n = buf.len();
+        if n == 0 { return Vec::new(); }
+        let mut out: Vec<Token> = Vec::with_capacity(n / 2);
+        let mut i = 0usize;
+        while i < n {
+            if buf[i] == ESCAPE { out.push(Token::Literal(ESCAPE)); i += 1; continue; }
+            if i + PREFIX > n || i + MIN_MATCH > n { out.push(Token::Literal(buf[i])); i += 1; continue; }
+            let key = prefix_key_at::<PREFIX>(buf, i);
+            if let Some((id, len)) = self.index.check_vocab(buf, i, key) {
+                let len_u8 = (len.min(255)) as u8;
+                if id <= 255 { out.push(Token::DictU8 { id: id as u8, len: len_u8 }); }
+                else { out.push(Token::DictU16 { id, len: len_u8 }); }
+                i += len;
+            } else {
+                out.push(Token::Literal(buf[i])); i += 1;
+            }
+        }
+        out
+    }
+
+    pub fn tokenize_to_gn_bytes(&self, buf: &[u8], u8_only: bool) -> Vec<u8> {
+        let n = buf.len();
+        if n == 0 { return Vec::new(); }
+        let mut out: Vec<u8> = Vec::with_capacity(n * 2);
+        let mut i = 0usize;
+        while i < n {
+            if buf[i] == ESCAPE { out.push(ESCAPE); out.push(0x00); i += 1; continue; }
+            if i + PREFIX > n || i + MIN_MATCH > n { out.push(buf[i]); i += 1; continue; }
+            let key = prefix_key_at::<PREFIX>(buf, i);
+            if let Some((id, len)) = self.index.check_vocab(buf, i, key) {
+                if id <= 255 {
+                    out.push(ESCAPE); out.push(id as u8); i += len;
+                } else if !u8_only {
+                    out.push(ESCAPE); out.push(0xFF);
+                    out.extend_from_slice(&(id as u16).to_le_bytes()); i += len;
+                } else {
+                    out.push(buf[i]); i += 1;
+                }
+            } else {
+                out.push(buf[i]); i += 1;
+            }
+        }
+        out
+    }
+}
+
+impl<const PREFIX: usize> Default for GNPrefixTokenizer<PREFIX> {
+    fn default() -> Self { Self::new() }
+}
+
+pub fn tokens_to_gn_bytes(tokens: &[Token]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(tokens.len() * 2);
+    for t in tokens {
+        match *t {
+            Token::Literal(b) => { if b == ESCAPE { out.push(ESCAPE); out.push(0x00); } else { out.push(b); } }
+            Token::DictU8 { id, .. } => { out.push(ESCAPE); out.push(id); }
+            Token::DictU16 { id, .. } => { out.push(ESCAPE); out.push(0xFF); out.extend_from_slice(&id.to_le_bytes()); }
+        }
+    }
+    out
+}
+
+pub fn deflate_stored_blocks(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + (data.len() / 65535 + 1) * 5);
+    let mut offset = 0usize;
+    while offset < data.len() {
+        let remaining = data.len() - offset;
+        let chunk_len = remaining.min(65535);
+        let final_block = (offset + chunk_len) == data.len();
+        out.push(if final_block { 0x01 } else { 0x00 });
+        let len = chunk_len as u16;
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&(!len).to_le_bytes());
+        out.extend_from_slice(&data[offset..offset + chunk_len]);
+        offset += chunk_len;
+    }
+    out
+}
+
+pub fn deflate_with_libdeflater(
+    compressor: &mut libdeflater::Compressor,
+    data: &[u8],
+    out_buf: &mut Vec<u8>,
+) -> Result<usize, libdeflater::CompressionError> {
+    let bound = compressor.deflate_compress_bound(data.len());
+    if out_buf.len() < bound { out_buf.resize(bound, 0); }
+    compressor.deflate_compress(data, out_buf.as_mut_slice())
+}
+
+#[inline]
+fn prefix_key<const PREFIX: usize>(pat: &[u8]) -> u32 {
+    if PREFIX == 3 { (pat[0] as u32) | ((pat[1] as u32) << 8) | ((pat[2] as u32) << 16) }
+    else { u32::from_le_bytes([pat[0], pat[1], pat[2], pat[3]]) }
+}
+
+#[inline]
+fn prefix_key_at<const PREFIX: usize>(buf: &[u8], i: usize) -> u32 {
+    if PREFIX == 3 { (buf[i] as u32) | ((buf[i+1] as u32) << 8) | ((buf[i+2] as u32) << 16) }
+    else { u32::from_le_bytes([buf[i], buf[i+1], buf[i+2], buf[i+3]]) }
+}
+
+#[inline]
+fn hash32(x: u32) -> u32 {
+    let mut v = x.wrapping_mul(0x9E37_79B1); v ^= v >> 16;
+    v = v.wrapping_mul(0x85EB_CA6B); v ^= v >> 13; v
+}
+
+#[inline]
+fn find_slot_insert(key: u32, mask: usize, keys: &mut [u32], used: &mut [u8]) -> usize {
+    let mut slot = (hash32(key) as usize) & mask;
+    loop {
+        if used[slot] == 0 { used[slot] = 1; keys[slot] = key; return slot; }
+        if keys[slot] == key { return slot; }
+        slot = (slot + 1) & mask;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn entry(bytes: &[u8]) -> DictEntry { DictEntry { bytes: bytes.to_vec(), freq: 1, saving: 1 } }
+
+    #[test]
+    fn test_greedy_longest() {
+        let entries = vec![entry(b"hello"), entry(b"hello world")];
+        let mut tok = GNPrefixTokenizer::<4>::new();
+        tok.seed_from_vocab(&entries);
+        let tokens = tok.tokenize(b"hello world");
+        assert!(tokens.iter().any(|t| matches!(t, Token::DictU8{..} | Token::DictU16{..})));
+    }
+
+    #[test]
+    fn test_escape_handling() {
+        let entries = vec![entry(b"abcd")];
+        let mut tok = GNPrefixTokenizer::<4>::new();
+        tok.seed_from_vocab(&entries);
+        let input = [ESCAPE, b'a', b'b', b'c', b'd'];
+        let gn = tok.tokenize_to_gn_bytes(&input, true);
+        assert_eq!(gn[0], ESCAPE); assert_eq!(gn[1], 0x00);
+    }
+
+    #[test]
+    fn test_short_buffer() {
+        let entries = vec![entry(b"abcd")];
+        let mut tok = GNPrefixTokenizer::<4>::new();
+        tok.seed_from_vocab(&entries);
+        let gn = tok.tokenize_to_gn_bytes(b"abc", true);
+        assert_eq!(gn, b"abc");
+    }
+}

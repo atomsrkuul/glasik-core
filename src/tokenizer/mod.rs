@@ -298,3 +298,5 @@ mod tests {
         );
     }
 }
+
+pub mod lz77_gn;

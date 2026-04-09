@@ -6,6 +6,10 @@ description = "Glasik Notation core"
 license = "MIT"
 repository = "https://github.com/atomsrkuul/glasik-core"
 
+[[bin]]
+name = "gn_sidecar"
+path = "src/bin/gn_sidecar.rs"
+
 [lib]
 name = "glasik_core"
 crate-type = ["cdylib", "rlib"]
@@ -16,6 +20,8 @@ ahash = "0.8"
 aho-corasick = "1.1"
 memchr = "2.7"
 libdeflater = "1.25"
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 rayon = "1.10"
 pyo3 = { version = "0.28", features = ["extension-module"], optional = true }
 
@@ -28,4 +34,8 @@ criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
 name = "codec_bench"
+harness = false
+
+[[bench]]
+name = "lz77_bench"
 harness = false

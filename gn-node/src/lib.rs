@@ -6,11 +6,16 @@ use napi_derive::napi;
 use glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2;
 use glasik_core::pipeline;
 use glasik_core::static_dict;
+use glasik_core::tokenizer::lz77_gn::GNPrefixTokenizer;
+use glasik_core::tokenizer::dictionary::DictEntry;
 use std::sync::OnceLock;
 use tokio::sync::{mpsc, oneshot};
 
 enum Job {
+    CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
+    RefreshVocab { resp: oneshot::Sender<usize> },
+    ExportEntries { resp: oneshot::Sender<String> },
     CompressPressurized { target: Vec<u8>, warm: Vec<Vec<u8>>, pk: usize, resp: oneshot::Sender<Vec<u8>> },
     WindowStats { resp: oneshot::Sender<String> },
     SaveSnapshot { path: String, resp: oneshot::Sender<String> },
@@ -18,6 +23,25 @@ enum Job {
 }
 
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
+static FAST_TOK: OnceLock<std::sync::Mutex<GNPrefixTokenizer<4>>> = OnceLock::new();
+
+fn get_fast_tok() -> &'static std::sync::Mutex<GNPrefixTokenizer<4>> {
+    FAST_TOK.get_or_init(|| {
+        let entries = static_dict::load_static_dict();
+        let dict: Vec<DictEntry> = entries.iter().map(|(b,f,s)| DictEntry {
+            bytes: b.clone(), freq: *f as usize, saving: *s as usize
+        }).collect();
+        let mut tok = GNPrefixTokenizer::<4>::new();
+        tok.seed_from_vocab(&dict);
+        std::sync::Mutex::new(tok)
+    })
+}
+
+/// Fast path: GNPrefixTokenizer O(n) single pass + libdeflate
+fn compress_lz77gn(buf: &[u8], tok: &GNPrefixTokenizer<4>) -> Vec<u8> {
+    let tokenized = tok.tokenize_to_gn_bytes(buf, true);
+    deflate_buf(tokenized)
+}
 
 fn deflate_buf(tokenized: Vec<u8>) -> Vec<u8> {
     let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
@@ -33,8 +57,14 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
     WORKER.get_or_init(|| {
         let (tx, mut rx) = mpsc::channel::<Job>(256);
         tokio::spawn(async move {
-            let entries = static_dict::load_static_dict();
-            let mut slider = SlidingTokenizerV2::new_with_static(entries);
+            let static_entries = static_dict::load_static_dict();
+            // Build GNPrefixTokenizer from static dict for fast O(n) compression
+            let dict_entries: Vec<DictEntry> = static_entries.iter().map(|(b,f,s)| DictEntry {
+                bytes: b.clone(), freq: *f as usize, saving: *s as usize
+            }).collect();
+            let mut tok4 = GNPrefixTokenizer::<4>::new();
+            tok4.seed_from_vocab(&dict_entries);
+            let mut slider = SlidingTokenizerV2::new_with_static(static_entries);
             // Auto-load snapshot
             let snap = format!("{}/.openclaw/gn-window.snapshot",
                 std::env::var("HOME").unwrap_or_default());
@@ -54,9 +84,23 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
             }
             while let Some(job) = rx.recv().await {
                 match job {
+                    Job::CompressFast { data, resp } => {
+                        // O(n) single pass -- no window update
+                        let _ = resp.send(compress_lz77gn(&data, &tok4));
+                    }
                     Job::CompressL2 { data, resp } => {
                         let t = slider.encode(&data);
                         let _ = resp.send(deflate_buf(t));
+                    }
+                    Job::RefreshVocab { resp } => {
+                        // Sync fast tokenizer from L2 window (uses u16 -- all entries)
+                        let (_, entries) = slider.export_dict();
+                        let dict: Vec<DictEntry> = entries.iter().map(|(b,f,s)| DictEntry {
+                            bytes: b.clone(), freq: *f as usize, saving: *s as usize
+                        }).collect();
+                        let n = dict.len();
+                        tok4.seed_from_vocab(&dict);
+                        let _ = resp.send(n);
                     }
                     Job::CompressPressurized { target, warm, pk, resp } => {
                         let start = warm.len().saturating_sub(pk);
@@ -81,6 +125,12 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                             Err(e) => format!("error: {}", e),
                         };
                         let _ = resp.send(msg);
+                    }
+                    Job::ExportEntries { resp } => {
+                        let (_, entries) = slider.export_dict();
+                        let arr: Vec<serde_json::Value> = entries.iter()
+                            .map(|(b,f,s)| serde_json::json!({"b": b, "f": f, "s": s})).collect();
+                        let _ = resp.send(serde_json::to_string(&arr).unwrap_or_default());
                     }
                 }
             }
@@ -124,11 +174,63 @@ pub fn gn_compress(data: Buffer) -> Buffer {
     Buffer::from(pipeline::compress(&data))
 }
 
+/// Sync fast compression -- O(n) single pass, no channel overhead
+/// Use gnRefreshVocab() after warming L2 window for best ratio
+#[napi]
+pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
+    let mut tok = get_fast_tok().lock().unwrap();
+    let tokenized = tok.tokenize_to_gn_bytes(&data, true);
+    Buffer::from(deflate_buf(tokenized))
+}
+
+/// Refresh thread-local fast tokenizer from shared vocab
+/// Call after gnRefreshVocab() to sync thread-local state
+#[napi]
+pub fn gn_set_vocab_sync(entries_json: String) -> u32 {
+    // Parse entries from JSON and seed tokenizer
+    if let Ok(d) = serde_json::from_str::<serde_json::Value>(&entries_json) {
+        if let Some(arr) = d.as_array() {
+            let mut dict: Vec<DictEntry> = arr.iter().filter_map(|e| {
+                let b: Vec<u8> = e["b"].as_array()?.iter()
+                    .filter_map(|x| x.as_u64().map(|v| v as u8)).collect();
+                let freq = e["f"].as_u64().unwrap_or(1) as usize;
+                let saving = e["s"].as_u64().unwrap_or(1) as usize;
+                Some(DictEntry { bytes: b, freq, saving })
+            }).collect();
+            dict.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+            let n = dict.len() as u32;
+            get_fast_tok().lock().unwrap().seed_from_vocab(&dict);
+            return n;
+        }
+    }
+    0
+}
+
 #[napi]
 pub fn gn_compress_batch(chunks: Vec<Buffer>) -> Vec<Buffer> {
     use rayon::prelude::*;
     let raw: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
     raw.par_iter().map(|d| Buffer::from(pipeline::compress(d))).collect()
+}
+
+#[napi]
+pub async fn gn_export_entries() -> Result<String> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::ExportEntries { resp: tx }, rx).await
+}
+
+#[napi]
+pub async fn gn_refresh_vocab() -> Result<u32> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::RefreshVocab { resp: tx }, rx).await
+        .map(|n| n as u32)
+}
+
+#[napi]
+pub async fn gn_compress_fast(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressFast { data: data.to_vec(), resp: tx }, rx).await
+        .map(Buffer::from)
 }
 
 #[napi]

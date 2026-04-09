@@ -250,6 +250,8 @@ dependencies = [
  "memchr",
  "pyo3",
  "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
