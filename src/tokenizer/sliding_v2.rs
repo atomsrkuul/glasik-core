@@ -239,7 +239,6 @@ impl SlidingTokenizerV2 {
                 saving: e.saving as usize,
             }).collect();
             self.cached_index = Some(FirstByteIndex::build(&self.cached_entries));
-            self.cached_index = Some(FirstByteIndex::build(&self.cached_entries));
             if self.ac_dirty {
                 self.cached_ac = crate::tokenizer::codon::build_ac(&self.cached_entries);
                 self.ac_dirty = false;
