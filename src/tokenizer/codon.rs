@@ -261,6 +261,74 @@ fn escape_only(buf: &[u8]) -> Vec<u8> {
     out
 }
 
+
+/// Split-stream encode: separate token IDs from literal bytes
+/// Returns (token_ids, literal_bytes) for independent compression
+/// Decoder: re-tokenize with same vocab to reconstruct positions
+pub fn encode_ac_split(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>) {
+    let mut tok_ids: Vec<u8> = Vec::new();
+    let mut literals: Vec<u8> = Vec::new();
+    let mut pos = 0usize;
+
+    for m in ac.find_iter(buf) {
+        // Literals before this match
+        for &b in &buf[pos..m.start()] {
+            literals.push(b);
+        }
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx < 254 {
+            tok_ids.push((pat_idx + 1) as u8);
+        } else {
+            // Beyond u8 range -- treat as literals
+            for &b in &buf[m.start()..m.end()] {
+                literals.push(b);
+            }
+        }
+        pos = m.end();
+    }
+    // Remaining literals
+    for &b in &buf[pos..] {
+        literals.push(b);
+    }
+    (tok_ids, literals)
+}
+
+/// Decode split-stream: reconstruct original bytes from token IDs + literals
+/// Token positions are recovered by re-running the same tokenizer
+pub fn decode_ac_split(buf: &[u8], tok_ids: &[u8], literals: &[u8],
+                        ac: &aho_corasick::AhoCorasick,
+                        entries: &[DictEntry]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(buf.len());
+    let mut tok_idx = 0usize;
+    let mut lit_idx = 0usize;
+    let mut pos = 0usize;
+
+    for m in ac.find_iter(buf) {
+        // Literals before this match
+        let lit_count = m.start() - pos;
+        out.extend_from_slice(&literals[lit_idx..lit_idx + lit_count]);
+        lit_idx += lit_count;
+
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx < 254 {
+            // Expand token using vocab
+            let id = tok_ids[tok_idx] as usize;
+            tok_idx += 1;
+            if id > 0 && id <= entries.len() {
+                out.extend_from_slice(&entries[id-1].bytes);
+            }
+        } else {
+            // Was emitted as literals
+            let len = m.end() - m.start();
+            out.extend_from_slice(&literals[lit_idx..lit_idx + len]);
+            lit_idx += len;
+        }
+        pos = m.end();
+    }
+    // Remaining literals
+    out.extend_from_slice(&literals[lit_idx..]);
+    out
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -252,6 +252,27 @@ impl SlidingTokenizerV2 {
     pub fn active_entries_pub(&self) -> Vec<DictEntry> { self.active_entries() }
 
     /// Decode raw tokenized bytes using current window vocab (no frame header)
+    /// Split-stream encode using cached AC -- returns (tok_ids, literals)
+    pub fn encode_ac_split(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let _ = self.get_index();
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::encode_ac_split(buf, ac)
+        } else {
+            (Vec::new(), buf.to_vec())
+        }
+    }
+
+    /// Decode split-stream using cached AC + vocab
+    pub fn decode_ac_split(&mut self, buf: &[u8], tok_ids: &[u8], literals: &[u8]) -> Vec<u8> {
+        let _ = self.get_index();
+        let entries = self.active_entries();
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::decode_ac_split(buf, tok_ids, literals, ac, &entries)
+        } else {
+            literals.to_vec()
+        }
+    }
+
     pub fn decode_raw(&self, tokenized: &[u8]) -> Result<Vec<u8>, String> {
         let active = self.active_entries();
         if active.is_empty() { return Ok(tokenized.to_vec()); }

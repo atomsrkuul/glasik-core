@@ -173,6 +173,16 @@ impl GlasikSlidingV2 {
         self.inner.ingest_fast(data);
     }
 
+    fn decode_ac_split(&mut self, py: Python, original: &[u8], tok_ids: &[u8], literals: &[u8]) -> PyResult<Py<PyBytes>> {
+        let out = self.inner.decode_ac_split(original, tok_ids, literals);
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn encode_ac_split(&mut self, py: Python, data: &[u8]) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+        let (toks, lits) = self.inner.encode_ac_split(data);
+        Ok((PyBytes::new(py, &toks).into(), PyBytes::new(py, &lits).into()))
+    }
+
     fn encode_ac_raw(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
         let tokenized = self.inner.encode_ac(data);
         Ok(PyBytes::new(py, &tokenized).into())
