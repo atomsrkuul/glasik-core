@@ -295,6 +295,83 @@ pub fn encode_ac_split(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, 
 
 /// Decode split-stream: reconstruct original bytes from token IDs + literals
 /// Token positions are recovered by re-running the same tokenizer
+
+/// Encode split-stream with interleaved pair format.
+/// Returns (pairs, literals) where pairs = [(2B lit_count LE)(1B tok_id)...]
+/// followed by 2B trailing_lit_count LE.
+/// Decoder needs only pairs + literals + vocab -- no original buffer required.
+pub fn encode_ac_interleaved(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>) {
+    let mut pairs: Vec<u8> = Vec::new();
+    let mut literals: Vec<u8> = Vec::new();
+    let mut pos = 0usize;
+    for m in ac.find_iter(buf) {
+        let lit_count = m.start() - pos;
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx < 254 {
+            // emit (lit_count: 2B LE)(tok_id: 1B)
+            pairs.extend_from_slice(&(lit_count as u16).to_le_bytes());
+            pairs.push((pat_idx + 1) as u8);
+            literals.extend_from_slice(&buf[pos..m.start()]);
+        } else {
+            // beyond range -- treat match as literals, no pair emitted
+            literals.extend_from_slice(&buf[pos..m.end()]);
+        }
+        pos = m.end();
+    }
+    // trailing literals count (2B LE)
+    let trailing = buf.len() - pos;
+    pairs.extend_from_slice(&(trailing as u16).to_le_bytes());
+    literals.extend_from_slice(&buf[pos..]);
+    (pairs, literals)
+}
+
+/// Decode interleaved pair format -- no original buffer needed.
+/// pairs = [(2B lit_count LE)(1B tok_id)...](2B trailing_lit_count LE)
+pub fn decode_ac_interleaved(pairs: &[u8], literals: &[u8], entries: &[DictEntry]) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    let mut lit_idx = 0usize;
+    let mut pair_pos = 0usize;
+
+    // Each pair is 3 bytes: 2B lit_count + 1B tok_id
+    // Last 2 bytes are trailing lit count
+    if pairs.len() < 2 {
+        return Err("pairs stream too short".into());
+    }
+    let body_len = pairs.len() - 2;
+    if body_len % 3 != 0 {
+        return Err(format!("pairs body length {} not multiple of 3", body_len));
+    }
+
+    while pair_pos < body_len {
+        let lit_count = u16::from_le_bytes([pairs[pair_pos], pairs[pair_pos+1]]) as usize;
+        let tok_id = pairs[pair_pos+2] as usize;
+        pair_pos += 3;
+
+        // emit literals
+        if lit_idx + lit_count > literals.len() {
+            return Err("literal overrun in pairs decode".into());
+        }
+        out.extend_from_slice(&literals[lit_idx..lit_idx + lit_count]);
+        lit_idx += lit_count;
+
+        // emit token expansion
+        if tok_id > 0 && tok_id <= entries.len() {
+            out.extend_from_slice(&entries[tok_id - 1].bytes);
+        } else {
+            return Err(format!("invalid tok_id {} (entries len {})", tok_id, entries.len()));
+        }
+    }
+
+    // trailing literals
+    let trailing = u16::from_le_bytes([pairs[pair_pos], pairs[pair_pos+1]]) as usize;
+    if lit_idx + trailing > literals.len() {
+        return Err("trailing literal overrun".into());
+    }
+    out.extend_from_slice(&literals[lit_idx..lit_idx + trailing]);
+
+    Ok(out)
+}
+
 pub fn decode_ac_split(buf: &[u8], tok_ids: &[u8], literals: &[u8],
                         ac: &aho_corasick::AhoCorasick,
                         entries: &[DictEntry]) -> Vec<u8> {

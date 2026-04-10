@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use crate::tokenizer::sliding_v2::SlidingTokenizerV2;
 use crate::tokenizer::dictionary::{DictEntry, build};
 use crate::tokenizer::codon::{
-    build_tiered_ac, encode_ac_split, decode_ac_split
+    build_tiered_ac, encode_ac_interleaved, decode_ac_interleaved
 };
 use crate::level4;
 
@@ -124,11 +124,27 @@ impl FractalCompressor {
             self.last_session_id = Some(session_id.to_string());
         }
 
-        // Encode using tiered AC
-        let (tok_ids, literals) = if let Some(ref ac) = self.cached_ac {
-            encode_ac_split(data, ac)
+        // Encode using tiered AC -- interleaved pair format (no original needed on decode)
+        let (pairs, literals) = if let Some(ref ac) = self.cached_ac {
+            encode_ac_interleaved(data, ac)
         } else {
-            (Vec::new(), data.to_vec())
+            // No AC -- emit all as literals with empty pairs (just trailing count)
+            let trailing = (data.len() as u16).to_le_bytes();
+            (trailing.to_vec(), data.to_vec())
+        };
+
+        // Deflate both streams independently
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        let pairs_deflated = {
+            let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+            let _ = enc.write_all(&pairs);
+            enc.finish().expect("deflate pairs failed")
+        };
+        let lits_deflated = {
+            let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+            let _ = enc.write_all(&literals);
+            enc.finish().expect("deflate literals failed")
         };
 
         // Update L2 session window
@@ -141,43 +157,53 @@ impl FractalCompressor {
         // Promote L2 patterns to L1
         self.promote_l2_to_l1(&stype, session_id);
 
-        // Frame: [1B shard_type][tok_ids][0x00][literals]
-        // Simple framing for now -- will extend to split-deflate
-        let mut out = Vec::with_capacity(1 + tok_ids.len() + 1 + literals.len());
+        // Frame: [1B shard_type][2B pairs_len LE][deflated pairs][deflated literals]
+        let mut out = Vec::with_capacity(3 + pairs_deflated.len() + lits_deflated.len());
         out.push(self.shard_type_byte(&stype));
-        out.extend_from_slice(&tok_ids);
-        out.push(0x00); // separator
-        out.extend_from_slice(&literals);
+        out.extend_from_slice(&(pairs_deflated.len() as u16).to_le_bytes());
+        out.extend_from_slice(&pairs_deflated);
+        out.extend_from_slice(&lits_deflated);
         out
     }
 
-    /// Decompress a shard
+    /// Decompress a shard -- fully self-contained, no original buffer needed
     pub fn decompress_shard(
         &mut self,
         data: &[u8],
         shard_type: &str,
         session_id: &str,
-        original: &[u8], // needed for AC scan on decode
     ) -> Result<Vec<u8>, String> {
         if data.is_empty() { return Ok(Vec::new()); }
+        if data.len() < 3 { return Err("frame too short".into()); }
 
         let stype = ShardType::from_str(shard_type);
-        let l1 = self.l1_by_type.get(&stype)
-            .map(|v| v.clone()).unwrap_or_default();
-        let l2 = self.l2_by_session.get(session_id)
-            .map(|w| w.active_entries_pub()).unwrap_or_default();
 
-        let ac = build_tiered_ac(&self.l0, &l1, &l2, &[])
-            .ok_or("failed to build AC for decode")?;
+        // Parse frame: [1B shard_type][2B pairs_len LE][deflated pairs][deflated literals]
+        let pairs_len = u16::from_le_bytes([data[1], data[2]]) as usize;
+        if data.len() < 3 + pairs_len {
+            return Err("frame truncated: pairs block".into());
+        }
+        let pairs_deflated = &data[3..3 + pairs_len];
+        let lits_deflated = &data[3 + pairs_len..];
 
-        // Split frame back into tok_ids + literals
-        let sep_pos = data.iter().position(|&b| b == 0x00)
-            .ok_or("missing separator in frame")?;
-        let tok_ids = &data[1..sep_pos]; // skip shard_type byte
-        let literals = &data[sep_pos+1..];
+        // Inflate both streams
+        use flate2::read::DeflateDecoder;
+        use std::io::Read;
+        let pairs = {
+            let mut dec = DeflateDecoder::new(pairs_deflated);
+            let mut buf = Vec::new();
+            dec.read_to_end(&mut buf).map_err(|e| format!("inflate pairs: {e}"))?;
+            buf
+        };
+        let literals = {
+            let mut dec = DeflateDecoder::new(lits_deflated);
+            let mut buf = Vec::new();
+            dec.read_to_end(&mut buf).map_err(|e| format!("inflate literals: {e}"))?;
+            buf
+        };
 
-        Ok(decode_ac_split(original, tok_ids, literals, &ac,
-            &self.all_entries(&stype, session_id)))
+        let entries = self.all_entries(&stype, session_id);
+        decode_ac_interleaved(&pairs, &literals, &entries)
     }
 
     fn promote_l3_to_l2(&mut self, l3: &[DictEntry], session_id: &str) {
