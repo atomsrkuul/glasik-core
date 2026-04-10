@@ -1,67 +1,67 @@
 # Glasik Notation (GN)
 
 Open-source domain-adaptive compression for LLM context data.
-Learns vocabulary from conversation streams. Beats gzip ratio everywhere. Beats brotli ratio on large chunks.
+Learns vocabulary from conversation streams.
+
+**Beats brotli-6 ratio and p99 latency simultaneously.**
 
 ## Benchmark Results
 
-Measured on ShareGPT V3, Intel i3-1215U, napi-rs addon (no IPC), 3-seed verified.
+Measured on ShareGPT V3 / WildChat / LMSYS / Ubuntu-IRC.
+Intel i3-1215U. PyO3 path. 4 corpora × 3 seeds = 12 independent measurements.
 
-### GN AC (Aho-Corasick encoder) — production path
+### GN split-stream batch=8 — production path
 
-| Chunk size | Ratio | vs gzip | vs brotli-6 | p50 | p99 |
-|------------|-------|---------|-------------|-----|-----|
-| Small (232B) | 1.566x | +16% | -3% | 0.015ms | 0.024ms |
-| Medium (989B) | 2.217x | +10% | -3% | 0.047ms | 0.087ms |
-| Large (2341B) | **2.897x** | **+15%** | **+4%** | **0.072ms** | **0.136ms** |
+| Corpus | Ratio | vs gzip | vs brotli-6 | p50 | p99 | MB/s |
+|--------|-------|---------|-------------|-----|-----|------|
+| ShareGPT | 2.49-2.52x | +15% | +2% | 0.043ms | 0.061ms | 26-27 |
+| WildChat | 2.48-2.51x | +15% | +2% | 0.042ms | 0.068ms | 26 |
+| LMSYS | 2.50-2.56x | +14% | +2% | 0.044ms | 0.079ms | 23-27 |
+| Ubuntu-IRC | 2.50-2.54x | +14-15% | +1-2% | 0.043ms | 0.111ms | 23-24 |
 
-### vs baselines (medium chunks, seed=42)
+### vs baselines
 
-| Method | Ratio | p50 | p99 |
-|--------|-------|-----|-----|
-| gzip-1 | 1.954x | 0.020ms | 0.028ms |
-| gzip-6 | 2.012x | 0.025ms | 0.036ms |
-| brotli-1 | 1.880x | 0.014ms | 0.019ms |
-| brotli-6 | 2.276x | 0.046ms | 0.072ms |
-| **GN AC** | **2.217x** | **0.047ms** | **0.087ms** |
-| GN L2 (codon) | 2.212x | 1.608ms | 10.285ms |
+| Method | Ratio | p50 | p99 | MB/s |
+|--------|-------|-----|-----|------|
+| gzip-1 | 2.097x | 0.024ms | 0.143ms | 40.0 |
+| gzip-6 | 2.181x | 0.024ms | 0.220ms | 37.1 |
+| brotli-1 | 2.023x | 0.013ms | 0.023ms | 84.8 |
+| brotli-6 | 2.472x | 0.044ms | 0.226ms | 22.0 |
+| **GN split b=8** | **2.49-2.56x** | **0.040ms** | **0.056-0.123ms** | **23-27** |
+| GN AC (single) | 2.13-2.20x | 0.042ms | 0.099ms | 22-26 |
 
 ## Architecture
-Conversation stream
+Conversation stream (batches of 8 chunks)
 → GN sliding window (learns domain vocabulary)
-→ Aho-Corasick O(n) tokenizer (all patterns simultaneously)
-→ libdeflate (entropy coding)
-→ compressed output
+→ Aho-Corasick O(n) tokenizer
+→ Split: token ID stream + literal byte stream
+→ Raw deflate each stream independently
+→ Frame: [2B tok_len][tok_deflated][lit_deflated]
+
+**Why split-stream wins:**
+- Mixed stream: gzip sees ESCAPE bytes breaking pattern matching
+- Token stream alone: pure symbol stream, highly compressible
+- Literal stream alone: clean text, no ESCAPE pollution
+- Batch=8: cross-chunk patterns in both streams improve further
 
 **Key properties:**
-- **O(n) matching**: Aho-Corasick automaton, single pass over input
-- **Domain-adaptive**: window learns from stream, rebuilds vocab every 50 chunks
-- **No IPC**: napi-rs Rust addon, runs in-process with Node.js
-- **Verified**: 3-seed reproducibility across ShareGPT/WildChat/LMSYS/Ubuntu-IRC
+- O(n) matching via Aho-Corasick automaton
+- Domain-adaptive: window learns from stream, rebuilds every 50 chunks
+- Lossless: round-trip verified, decode requires same vocab snapshot
+- No IPC: napi-rs Rust addon, runs in-process
 
-## Why GN beats gzip
+## Compression modes
 
-gzip finds repetition within one buffer (32KB LZ77 window).
-GN finds repetition across buffers (domain vocabulary learned from the stream).
-They are complementary — GN's cross-chunk patterns + deflate's intra-chunk compression.
-
-## Why GN beats brotli on large chunks
-
-Brotli's static dictionary is trained on web text.
-GN's dynamic dictionary adapts to the actual conversation domain.
-On LLM conversation data, domain-specific vocabulary outperforms generic web dictionary.
+| Mode | Ratio | Speed | Use case |
+|------|-------|-------|----------|
+| GN split b=8 | 2.49-2.56x | 0.040ms | Batch/conversation compression |
+| GN split b=16 | 2.54-2.62x | 0.037ms | Larger batches |
+| GN AC single | 2.13-2.20x | 0.042ms | Per-message, lossless |
+| GN L2 codon | 2.36-2.49x | 1.8ms | Max ratio reference |
 
 ## NLNet NGI Zero Commons Fund
 
 Application #2026-06-023.
-
-## Status
-
-- GN AC: production encoder, O(n) Aho-Corasick, verified
-- GN L2 codon: reference encoder, high ratio, 10ms p99
-- ANS entropy: implemented, benchmarked, available
-- napi-rs addon: Node.js production path
-- PyO3: Python research path
 
 ## License
 
