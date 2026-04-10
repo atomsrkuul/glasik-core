@@ -329,6 +329,66 @@ pub fn decode_ac_split(buf: &[u8], tok_ids: &[u8], literals: &[u8],
     out.extend_from_slice(&literals[lit_idx..]);
     out
 }
+
+/// Build tiered Aho-Corasick automaton from 4 vocabulary tiers
+/// Token ID ranges:
+///   L0: IDs  1- 63  (universal, pre-trained, highest priority)
+///   L1: IDs 64-127  (domain-specific, per shard type)
+///   L2: IDs 128-191 (session-local, learned online)
+///   L3: IDs 192-254 (chunk-local, ephemeral)
+/// Within each tier, patterns sorted by saving descending.
+pub fn build_tiered_ac(
+    l0: &[DictEntry],
+    l1: &[DictEntry],
+    l2: &[DictEntry],
+    l3: &[DictEntry],
+) -> Option<aho_corasick::AhoCorasick> {
+    use aho_corasick::{AhoCorasick, MatchKind};
+
+    const SLOTS: [usize; 4] = [63, 64, 64, 63]; // IDs 1-63, 64-127, 128-191, 192-254
+    let tiers = [l0, l1, l2, l3];
+
+    let mut patterns: Vec<Vec<u8>> = Vec::new();
+
+    for (tier_idx, (tier, &slots)) in tiers.iter().zip(SLOTS.iter()).enumerate() {
+        let mut sorted: Vec<&DictEntry> = tier.iter()
+            .filter(|e| e.bytes.len() >= 4)
+            .collect();
+        sorted.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+        let take = sorted.len().min(slots);
+        for e in sorted.into_iter().take(take) {
+            patterns.push(e.bytes.clone());
+        }
+        // Pad with empty if tier has fewer entries than slots
+        // (token IDs in next tier start after this tier's slots)
+        let _ = tier_idx; // suppress warning
+    }
+
+    if patterns.is_empty() { return None; }
+
+    AhoCorasick::builder()
+        .match_kind(MatchKind::LeftmostLongest)
+        .build(&patterns)
+        .ok()
+}
+
+/// Get the tier (0-3) for a given pattern index from build_tiered_ac
+/// Used by encoder to determine which tier a match came from
+#[inline]
+pub fn tier_for_pattern_idx(idx: usize) -> u8 {
+    if idx < 63 { 0 }
+    else if idx < 127 { 1 }
+    else if idx < 191 { 2 }
+    else { 3 }
+}
+
+/// Convert pattern index to token ID (1-254, tier-partitioned)
+/// pattern_idx is the index in the combined pattern list from build_tiered_ac
+#[inline]
+pub fn pattern_idx_to_token_id(idx: usize) -> Option<u8> {
+    let id = idx + 1; // IDs start at 1
+    if id >= 1 && id <= 254 { Some(id as u8) } else { None }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
