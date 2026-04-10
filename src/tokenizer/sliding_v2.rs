@@ -141,6 +141,7 @@ impl SlidingTokenizerV2 {
         self.cached_index = None;
         self.cached_entries.clear();
         self.index_dirty = true;
+        self.ac_dirty = true; // full vocab replacement -- AC must rebuild
         self.dict_version = version;
         for (bytes, freq, saving) in entries {
             let idx = self.window.len();
@@ -195,7 +196,7 @@ impl SlidingTokenizerV2 {
         }
         if changed {
             self.index_dirty = true;
-            // Only invalidate AC every 50 batches to amortize rebuild cost
+            // AC throttled: frequency updates do not change pattern set, rebuild amortized every 50 batches
         }
         changed
     }

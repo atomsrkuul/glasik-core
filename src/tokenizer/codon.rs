@@ -605,9 +605,8 @@ pub fn encode_ac(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
 }
 
 /// Encode using pre-built AC automaton -- O(n) single pass
-/// Maps all pattern IDs to u8 via wrapping (same as codon FirstByteIndex)
-/// This preserves the accidental benefit of ID collision: deflate sees
-/// repeated ESCAPE+id pairs across chunks and compresses them efficiently
+/// Maps all pattern IDs to strict u8 range 1-254 (no wrapping, no collision)
+/// Token IDs are assigned by tier partition: L0=1-63, L1=64-127, L2=128-191, L3=192-254
 pub fn encode_ac_with(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> Vec<u8> {
     let mut out = Vec::with_capacity(buf.len());
     let mut pos = 0usize;

@@ -161,7 +161,9 @@ impl<const PREFIX: usize> GNPrefixTokenizer<PREFIX> {
 
     /// Tokenize with local repeat detection (cheap intra-buffer LZ77)
     /// Scans back up to 64 bytes for 4-byte matches -- O(n*64) worst case
-    /// but very cache-friendly and fast in practice
+    /// EXPERIMENTAL -- benchmarked worse than pure vocab matching, not used in production
+    /// Kept for reference only. Local repeat encoding: ESCAPE+0xFD+dist(u8)+len(u8)
+    #[allow(dead_code)]
     pub fn tokenize_with_local(buf: &[u8], index: &PrefixIndex<PREFIX>, u8_only: bool) -> Vec<u8> {
         let n = buf.len();
         if n == 0 { return Vec::new(); }
