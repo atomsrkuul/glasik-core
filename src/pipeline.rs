@@ -71,7 +71,7 @@ impl PipelineStats {
 fn deflate(data: &[u8]) -> Vec<u8> {
     let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
     let _ = enc.write_all(data);
-    enc.finish().unwrap_or_else(|_| data.to_vec())
+    enc.finish().expect("deflate encoder should never fail on in-memory buffer")
 }
 
 fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
