@@ -59,7 +59,6 @@ impl SlidingTokenizerV2 {
     pub fn ingest_fast(&mut self, buf: &[u8]) {
         let batch_entries = build(buf);
         let changed = self.update_window(&batch_entries);
-        self.evict();
         self.batch_count += 1;
         if changed {
             self.dict_version = self.dict_version.wrapping_add(1);
@@ -71,7 +70,6 @@ impl SlidingTokenizerV2 {
         self.batch_count += 1;
         let batch_entries = build(buf);
         let changed = self.update_window(&batch_entries);
-        if self.batch_count % 100 == 0 { self.evict(); }
         if changed {
             self.dict_version = self.dict_version.wrapping_add(1);
             self.index_dirty = true;
@@ -202,22 +200,13 @@ impl SlidingTokenizerV2 {
     }
 
     fn evict(&mut self) {
-        let batch = self.batch_count;
-        let mut removed = Vec::new();
-        self.window.retain(|e| {
-            let age = batch.saturating_sub(e.last_seen);
-            let keep = age < EVICTION_AGE || e.cumulative_freq > 10;
-            if !keep { removed.push(e.bytes.clone()); }
-            keep
-        });
-        for b in removed { self.index.remove(&b); }
-        // Rebuild index after retain (indices may have shifted)
-        self.index.clear();
-        for (i, e) in self.window.iter().enumerate() {
-            self.index.insert(e.bytes.clone(), i);
+        // Phase 1: no eviction -- L0/L1/L2/L3 tiered architecture eliminates
+        // the need for eviction on the hot path. Window saturates at MAX_WINDOW_ENTRIES
+        // and remains stable. Revisit (incremental only) if real sessions show
+        // measurable stale-pattern degradation.
+        if self.window.len() >= MAX_WINDOW_ENTRIES {
+            eprintln!("GN warn: L2 window saturated at {} entries -- no eviction active", MAX_WINDOW_ENTRIES);
         }
-        self.index_dirty = true;
-        self.ac_dirty = true;
     }
 
     fn worst_entry(&self, min_value: u64) -> Option<usize> {
