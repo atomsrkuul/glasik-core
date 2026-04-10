@@ -14,6 +14,8 @@ use tokio::sync::{mpsc, oneshot};
 enum Job {
     CompressHybrid { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressAC { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
+    CompressSplit { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
+    CompressSplitBatch { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<Vec<u8>> },
     DecompressL2 { data: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
@@ -109,6 +111,40 @@ fn deflate_buf(tokenized: Vec<u8>) -> Vec<u8> {
     }
 }
 
+fn split_deflate(tok_ids: Vec<u8>, literals: Vec<u8>) -> Vec<u8> {
+    // Compress each stream independently with raw deflate
+    // Frame: [2B tok_deflated_len][tok_deflated][lit_deflated]
+    let tok_comp = if tok_ids.is_empty() {
+        vec![]
+    } else {
+        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
+        let max = comp.deflate_compress_bound(tok_ids.len());
+        let mut out = vec![0u8; max];
+        match comp.deflate_compress(&tok_ids, &mut out) {
+            Ok(n) => { out.truncate(n); if out.len() < tok_ids.len() { out } else { tok_ids } }
+            Err(_) => tok_ids
+        }
+    };
+    let lit_comp = if literals.is_empty() {
+        vec![]
+    } else {
+        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
+        let max = comp.deflate_compress_bound(literals.len());
+        let mut out = vec![0u8; max];
+        match comp.deflate_compress(&literals, &mut out) {
+            Ok(n) => { out.truncate(n); if out.len() < literals.len() { out } else { literals } }
+            Err(_) => literals
+        }
+    };
+    // Frame: [2B tok_len][tok_data][lit_data]
+    let tok_len = tok_comp.len() as u16;
+    let mut frame = Vec::with_capacity(2 + tok_comp.len() + lit_comp.len());
+    frame.extend_from_slice(&tok_len.to_le_bytes());
+    frame.extend_from_slice(&tok_comp);
+    frame.extend_from_slice(&lit_comp);
+    frame
+}
+
 fn inflate_buf(data: &[u8]) -> std::result::Result<Vec<u8>, String> {
     if data.is_empty() { return Ok(Vec::new()); }
     let flag = data[0];
@@ -172,6 +208,23 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         // O(n) Aho-Corasick -- fast path with full window vocab
                         let tokenized = slider.encode_ac(&data);
                         let _ = resp.send(deflate_buf(tokenized));
+                    }
+                    Job::CompressSplit { data, resp } => {
+                        let (tok_ids, literals) = slider.encode_ac_split(&data);
+                        let _ = resp.send(split_deflate(tok_ids, literals));
+                    }
+                    Job::CompressSplitBatch { chunks, resp } => {
+                        // Batch split-stream: collect ALL tok/lit streams across chunks
+                        // deflate combined streams once -- eliminates per-chunk header overhead
+                        // This is where beats-brotli ratio comes from
+                        let mut all_toks: Vec<u8> = Vec::new();
+                        let mut all_lits: Vec<u8> = Vec::new();
+                        for chunk in &chunks {
+                            let (toks, lits) = slider.encode_ac_split(chunk);
+                            all_toks.extend_from_slice(&toks);
+                            all_lits.extend_from_slice(&lits);
+                        }
+                        let _ = resp.send(split_deflate(all_toks, all_lits));
                     }
                     Job::DecompressL2 { data, resp } => {
                         // Inflate then decode tokens using current window vocab
@@ -375,6 +428,21 @@ pub async fn gn_refresh_vocab() -> Result<u32> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::RefreshVocab { resp: tx }, rx).await
         .map(|n| n as u32)
+}
+
+#[napi]
+pub async fn gn_compress_split_batch(chunks: Vec<Buffer>) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    let vecs: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
+    send_job(Job::CompressSplitBatch { chunks: vecs, resp: tx }, rx).await
+        .map(Buffer::from)
+}
+
+#[napi]
+pub async fn gn_compress_split(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressSplit { data: data.to_vec(), resp: tx }, rx).await
+        .map(Buffer::from)
 }
 
 #[napi]
