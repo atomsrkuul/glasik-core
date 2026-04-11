@@ -227,6 +227,7 @@ dependencies = [
 name = "gn-native"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "glasik-core",
  "hex",
  "libdeflater",
