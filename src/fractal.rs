@@ -86,7 +86,7 @@ impl FractalCompressor {
     }
 
     /// Compress a shard with tiered vocabulary
-    pub fn compress_shard(
+    pub fn compress_shard_with_pairs(
         &mut self,
         data: &[u8],
         shard_type: &str,
