@@ -192,6 +192,11 @@ impl FractalCompressor {
         if data.len() < 3 { return Err("frame too short".into()); }
 
         let stype = ShardType::from_str(shard_type);
+        // Verify frame shard_type byte matches caller parameter
+        let expected_byte = self.shard_type_byte(&stype);
+        if data[0] != expected_byte {
+            return Err(format!("shard_type mismatch: frame has 0x{:02x}, caller expects 0x{:02x}", data[0], expected_byte));
+        }
 
         // Parse frame: [1B shard_type][2B pairs_len LE][2B l3_ser_len LE][l3_ser][deflated pairs][deflated literals]
         if data.len() < 5 { return Err("frame too short for header".into()); }
