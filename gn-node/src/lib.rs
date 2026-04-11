@@ -584,3 +584,5 @@ pub async fn gn_compress_fractal_with_vtc(
 
     Ok(vtc)
 }
+mod vtc_patch;
+pub use vtc_patch::*;
