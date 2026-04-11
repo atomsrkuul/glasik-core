@@ -1,8 +1,8 @@
-#![deny(clippy::all)]
-#![allow(clippy::unused_unit)]
-
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+
+
+use napi::bindgen_prelude::*;
 use glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2;
 use glasik_core::fractal::FractalCompressor;
 use glasik_core::pipeline;
@@ -320,7 +320,7 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         let _ = resp.send(msg);
                     }
                     Job::CompressFractal { data, shard_type, session_id, resp } => {
-                        let out = fractal.compress_shard(&data, &shard_type, &session_id);
+                        let out = fractal.compress_shard_with_pairs(&data, &shard_type, &session_id);
                         let _ = resp.send(out);
                     }
                     Job::DecompressFractal { data, shard_type, session_id, resp } => {
@@ -372,12 +372,14 @@ async fn send_job<T>(job: Job, rx: oneshot::Receiver<T>) -> Result<T> {
     rx.await.map_err(|_| Error::from_reason("worker dropped"))
 }
 
+#[napi]
 pub fn gn_compress(data: Buffer) -> Buffer {
     Buffer::from(pipeline::compress(&data))
 }
 
 /// Sync fast compression -- O(n) single pass, no channel overhead
 /// Use gnRefreshVocab() after warming L2 window for best ratio
+#[napi]
 pub fn gn_hybrid_rebuild() -> u32 {
     let mut enc = get_hybrid().lock().unwrap();
     enc.maybe_rebuild();
@@ -385,6 +387,7 @@ pub fn gn_hybrid_rebuild() -> u32 {
     gen as u32
 }
 
+#[napi]
 pub fn gn_compress_local(data: Buffer) -> Buffer {
     // Same as fast sync -- local repeat deprecated (overhead > savings)
     with_tl_hybrid(|tok| {
@@ -393,6 +396,7 @@ pub fn gn_compress_local(data: Buffer) -> Buffer {
     })
 }
 
+#[napi]
 pub fn gn_compress_tl(data: Buffer) -> Buffer {
     // Thread-local tokenizer: zero mutex, zero arc-swap, zero contention
     with_tl_hybrid(|tok| {
@@ -401,11 +405,13 @@ pub fn gn_compress_tl(data: Buffer) -> Buffer {
     })
 }
 
+#[napi]
 pub fn gn_compress_hybrid_sync(data: Buffer) -> Buffer {
     let mut enc = get_hybrid().lock().unwrap();
     Buffer::from(enc.encode(&data))
 }
 
+#[napi]
 pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
     let mut tok = get_fast_tok().lock().unwrap();
     let tokenized = tok.tokenize_to_gn_bytes(&data, true);  // u8 mode: top 254 entries
@@ -414,6 +420,7 @@ pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
 
 /// Refresh thread-local fast tokenizer from shared vocab
 /// Call after gnRefreshVocab() to sync thread-local state
+#[napi]
 pub fn gn_set_vocab_sync(entries_json: String) -> u32 {
     // Parse entries from JSON and seed tokenizer
     if let Ok(d) = serde_json::from_str::<serde_json::Value>(&entries_json) {
@@ -434,23 +441,27 @@ pub fn gn_set_vocab_sync(entries_json: String) -> u32 {
     0
 }
 
+#[napi]
 pub fn gn_compress_batch(chunks: Vec<Buffer>) -> Vec<Buffer> {
     use rayon::prelude::*;
     let raw: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
     raw.par_iter().map(|d| Buffer::from(pipeline::compress(d))).collect()
 }
 
+#[napi]
 pub async fn gn_export_entries() -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::ExportEntries { resp: tx }, rx).await
 }
 
+#[napi]
 pub async fn gn_refresh_vocab() -> Result<u32> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::RefreshVocab { resp: tx }, rx).await
         .map(|n| n as u32)
 }
 
+#[napi]
 pub async fn gn_compress_split_batch(chunks: Vec<Buffer>) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     let vecs: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
@@ -458,42 +469,49 @@ pub async fn gn_compress_split_batch(chunks: Vec<Buffer>) -> Result<Buffer> {
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_split(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressSplit { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_decompress_ac(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::DecompressL2 { data: data.to_vec(), resp: tx }, rx).await?
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_ac(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressAC { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_hybrid(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressHybrid { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_fast(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressFast { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_l2(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressL2 { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_pressurized(target: Buffer, warm_bufs: Vec<Buffer>, pk: u32) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     let warm: Vec<Vec<u8>> = warm_bufs.into_iter().map(|b| b.to_vec()).collect();
@@ -501,21 +519,25 @@ pub async fn gn_compress_pressurized(target: Buffer, warm_bufs: Vec<Buffer>, pk:
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_window_stats() -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::WindowStats { resp: tx }, rx).await
 }
 
+#[napi]
 pub async fn gn_save_snapshot(path: String) -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::SaveSnapshot { path, resp: tx }, rx).await
 }
 
+#[napi]
 pub async fn gn_load_snapshot(path: String) -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::LoadSnapshot { path, resp: tx }, rx).await
 }
 
+#[napi]
 pub fn gn_decompress(data: Buffer) -> Result<Buffer> {
     // Try napi framing first (0x00/0x01 flag byte)
     if !data.is_empty() && (data[0] == 0x00 || data[0] == 0x01) {
@@ -529,6 +551,7 @@ pub fn gn_decompress(data: Buffer) -> Result<Buffer> {
         .map_err(|e: glasik_core::pipeline::PipelineError| Error::from_reason(e.to_string()))
 }
 
+#[napi]
 pub async fn gn_compress_fractal(
     data: Buffer,
     shard_type: String,
@@ -543,6 +566,7 @@ pub async fn gn_compress_fractal(
     }, rx).await.map(|v| Buffer::from(v))
 }
 
+#[napi]
 pub async fn gn_decompress_fractal(
     data: Buffer,
     shard_type: String,
@@ -560,6 +584,47 @@ pub async fn gn_decompress_fractal(
 }
 
 
+
+
+
+use napi::bindgen_prelude::*;
+
+
+#[napi]
+pub fn gn_test() -> String {
+    "binding_ok".to_string()
+}
+
+#[napi]
+pub async fn gn_get_pairs(
+    data: Buffer,
+    shard_type: String,
+    session_id: String,
+) -> Result<Vec<u8>> {
+
+    let frame = gn_compress_fractal(
+        data,
+        shard_type,
+        session_id
+    ).await?;
+
+    if frame.len() < 5 {
+        return Ok(vec![]);
+    }
+
+    let pairs_len = u16::from_le_bytes([frame[1], frame[2]]) as usize;
+    let l3_len = u16::from_le_bytes([frame[3], frame[4]]) as usize;
+
+    let start = 5 + l3_len;
+    let end = start + pairs_len;
+
+    if end > frame.len() {
+        return Ok(vec![]);
+    }
+
+    Ok(frame[start..end].to_vec())
+}
+
 #[napi]
 pub async fn gn_compress_fractal_with_vtc(
     data: Buffer,
@@ -567,22 +632,20 @@ pub async fn gn_compress_fractal_with_vtc(
     session_id: String,
 ) -> Result<String> {
 
-    let compressed = gn_compress_fractal(
-        data.clone(),
-        shard_type.clone(),
-        session_id.clone()
+    let frame = gn_compress_fractal(
+        data,
+        shard_type,
+        session_id
     ).await?;
 
     use sha2::{Sha256, Digest};
 
     let mut hasher = Sha256::new();
-    hasher.update(shard_type.as_bytes());
-    hasher.update(&compressed);
+    hasher.update(&frame);
 
     let hash = hasher.finalize();
-    let vtc = format!("VTC-v1-{}", hex::encode(&hash[..16]));
 
-    Ok(vtc)
+    let hex = hex::encode(hash);
+
+    Ok(format!("VTC-v1-{}", &hex[..32]))
 }
-mod vtc_patch;
-pub use vtc_patch::*;
