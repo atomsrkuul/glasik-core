@@ -3,3 +3,6 @@
 gn-node/target/
 gn-node/node_modules/
 gn-node/*.node
+lattice-ui/node_modules/
+lattice-ui/dist/
+lattice.json
