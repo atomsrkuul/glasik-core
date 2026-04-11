@@ -118,7 +118,11 @@ impl FractalCompressor {
             || self.last_session_id.as_deref() != Some(session_id);
 
         if need_rebuild {
-            self.cached_ac = build_tiered_ac(&self.l0, &l1_snap, &l2_entries, &l3);
+            // L2 excluded from AC -- L2 state mutates and cannot be
+            // reconstructed at decode time. L2 promotes to L1 for
+            // persistent patterns. Frame self-contained via L3.
+            let empty_l2: Vec<DictEntry> = Vec::new();
+            self.cached_ac = build_tiered_ac(&self.l0, &l1_snap, &empty_l2, &l3);
             self.ac_dirty = false;
             self.last_shard_type = Some(stype.clone());
             self.last_session_id = Some(session_id.to_string());
@@ -132,6 +136,15 @@ impl FractalCompressor {
             let trailing = (data.len() as u16).to_le_bytes();
             (trailing.to_vec(), data.to_vec())
         };
+
+        // Serialize L3 entries: [(1B pattern_len)(pattern_bytes)...]
+        let mut l3_ser: Vec<u8> = Vec::new();
+        for e in &l3 {
+            if e.bytes.len() <= 255 {
+                l3_ser.push(e.bytes.len() as u8);
+                l3_ser.extend_from_slice(&e.bytes);
+            }
+        }
 
         // Deflate both streams independently
         use flate2::{write::DeflateEncoder, Compression};
@@ -157,10 +170,12 @@ impl FractalCompressor {
         // Promote L2 patterns to L1
         self.promote_l2_to_l1(&stype, session_id);
 
-        // Frame: [1B shard_type][2B pairs_len LE][deflated pairs][deflated literals]
-        let mut out = Vec::with_capacity(3 + pairs_deflated.len() + lits_deflated.len());
+        // Frame: [1B shard_type][2B pairs_len LE][2B l3_ser_len LE][l3_ser][deflated pairs][deflated literals]
+        let mut out = Vec::with_capacity(5 + l3_ser.len() + pairs_deflated.len() + lits_deflated.len());
         out.push(self.shard_type_byte(&stype));
         out.extend_from_slice(&(pairs_deflated.len() as u16).to_le_bytes());
+        out.extend_from_slice(&(l3_ser.len() as u16).to_le_bytes());
+        out.extend_from_slice(&l3_ser);
         out.extend_from_slice(&pairs_deflated);
         out.extend_from_slice(&lits_deflated);
         out
@@ -178,13 +193,30 @@ impl FractalCompressor {
 
         let stype = ShardType::from_str(shard_type);
 
-        // Parse frame: [1B shard_type][2B pairs_len LE][deflated pairs][deflated literals]
-        let pairs_len = u16::from_le_bytes([data[1], data[2]]) as usize;
-        if data.len() < 3 + pairs_len {
-            return Err("frame truncated: pairs block".into());
+        // Parse frame: [1B shard_type][2B pairs_len LE][2B l3_ser_len LE][l3_ser][deflated pairs][deflated literals]
+        if data.len() < 5 { return Err("frame too short for header".into()); }
+        let pairs_len   = u16::from_le_bytes([data[1], data[2]]) as usize;
+        let l3_ser_len  = u16::from_le_bytes([data[3], data[4]]) as usize;
+        let header_end  = 5 + l3_ser_len;
+        if data.len() < header_end + pairs_len {
+            return Err("frame truncated".into());
         }
-        let pairs_deflated = &data[3..3 + pairs_len];
-        let lits_deflated = &data[3 + pairs_len..];
+        // Deserialize L3
+        let l3_ser = &data[5..5 + l3_ser_len];
+        let mut l3_entries: Vec<DictEntry> = Vec::new();
+        let mut pos = 0usize;
+        while pos < l3_ser.len() {
+            let plen = l3_ser[pos] as usize;
+            pos += 1;
+            if pos + plen > l3_ser.len() { break; }
+            l3_entries.push(DictEntry {
+                bytes: l3_ser[pos..pos+plen].to_vec(),
+                freq: 1, saving: plen,
+            });
+            pos += plen;
+        }
+        let pairs_deflated = &data[header_end..header_end + pairs_len];
+        let lits_deflated  = &data[header_end + pairs_len..];
 
         // Inflate both streams
         use flate2::read::DeflateDecoder;
@@ -202,7 +234,14 @@ impl FractalCompressor {
             buf
         };
 
-        let entries = self.all_entries(&stype, session_id);
+        // Decode with L0 + L1 + L3 (from frame) only
+        // L2 excluded -- mutates on every compress call, not reconstructable at decode time
+        // L2 still learns and promotes to L1 for persistent patterns
+        let mut entries = self.l0.clone();
+        if let Some(l1) = self.l1_by_type.get(&stype) {
+            entries.extend_from_slice(l1);
+        }
+        entries.extend(l3_entries);
         decode_ac_interleaved(&pairs, &literals, &entries)
     }
 

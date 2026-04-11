@@ -4,6 +4,7 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 use glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2;
+use glasik_core::fractal::FractalCompressor;
 use glasik_core::pipeline;
 use glasik_core::static_dict;
 use glasik_core::tokenizer::lz77_gn::GNPrefixTokenizer;
@@ -25,6 +26,8 @@ enum Job {
     WindowStats { resp: oneshot::Sender<String> },
     SaveSnapshot { path: String, resp: oneshot::Sender<String> },
     LoadSnapshot { path: String, resp: oneshot::Sender<String> },
+    CompressFractal { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<Vec<u8>> },
+    DecompressFractal { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
 }
 
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
@@ -199,6 +202,24 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                     }
                 }
             }
+            // Init FractalCompressor -- load L0 from same snapshot
+            let mut fractal = FractalCompressor::new();
+            let snap_path = format!("{}/.openclaw/gn-window.snapshot",
+                std::env::var("HOME").unwrap_or_default());
+            if let Ok(data) = std::fs::read_to_string(&snap_path) {
+                if let Ok(d) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(arr) = d["entries"].as_array() {
+                        let l0: Vec<(Vec<u8>, u64, u64)> = arr.iter().filter_map(|e| {
+                            let b: Vec<u8> = e["b"].as_array()?.iter()
+                                .filter_map(|x| x.as_u64().filter(|&v| v <= 255).map(|v| v as u8)).collect();
+                            Some((b, e["f"].as_u64()?, e["s"].as_u64()?))
+                        }).collect();
+                        let n = l0.len();
+                        fractal.load_l0(l0);
+                        eprintln!("GN-NATIVE: fractal L0 loaded {} entries", n);
+                    }
+                }
+            }
             while let Some(job) = rx.recv().await {
                 match job {
                     Job::CompressHybrid { data, resp } => {
@@ -297,6 +318,16 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                             Err(e) => format!("error: {}", e),
                         };
                         let _ = resp.send(msg);
+                    }
+                    Job::CompressFractal { data, shard_type, session_id, resp } => {
+                        let out = fractal.compress_shard(&data, &shard_type, &session_id);
+                        let _ = resp.send(out);
+                    }
+                    Job::DecompressFractal { data, shard_type, session_id, resp } => {
+                        let out = fractal.decompress_shard(&data, &shard_type, &session_id)
+                            .map(|v| v)
+                            .map_err(|e| napi::Error::from_reason(e));
+                        let _ = resp.send(out);
                     }
                     Job::ExportEntries { resp } => {
                         let (_, entries) = slider.export_dict();
@@ -518,4 +549,36 @@ pub fn gn_decompress(data: Buffer) -> Result<Buffer> {
     pipeline::decompress(&data)
         .map(Buffer::from)
         .map_err(|e: glasik_core::pipeline::PipelineError| Error::from_reason(e.to_string()))
+}
+
+#[napi]
+pub async fn gn_compress_fractal(
+    data: Buffer,
+    shard_type: String,
+    session_id: String,
+) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressFractal {
+        data: data.to_vec(),
+        shard_type,
+        session_id,
+        resp: tx,
+    }, rx).await.map(|v| Buffer::from(v))
+}
+
+#[napi]
+pub async fn gn_decompress_fractal(
+    data: Buffer,
+    shard_type: String,
+    session_id: String,
+) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::DecompressFractal {
+        data: data.to_vec(),
+        shard_type,
+        session_id,
+        resp: tx,
+    }, rx).await?
+    .map(|v| Buffer::from(v))
+    .map_err(|e| e)
 }
