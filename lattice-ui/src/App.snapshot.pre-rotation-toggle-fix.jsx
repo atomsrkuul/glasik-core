@@ -104,6 +104,8 @@ export default function App() {
   const [selected, setSelected] = useState(null);
   const [showMenu, setShowMenu] = useState(true);
   const [enableRotation, setEnableRotation] = useState(true);
+const enableRotationRef = useRef(true);
+const enableRotationRef = useRef(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
@@ -113,6 +115,10 @@ export default function App() {
   const meshesRef = useRef({});
   const selectedRef = useRef(null);
   const stepsRef = useRef([]);
+
+useEffect(() => {
+  enableRotationRef.current = enableRotationRef.current;
+}, [enableRotationRef.current]);
 
   useEffect(() => {
     const W = window.innerWidth;
@@ -336,7 +342,7 @@ export default function App() {
             setSelected(shardData[vtc]);
             selectedRef.current = vtc;
 
-            if (enableRotation) Object.values(meshes).forEach((m) => {
+            if (enableRotationRef.current) Object.values(meshes).forEach((m) => {
               if (!m.material) return;
               const isSelected = m.userData.vtc === vtc;
 
@@ -373,7 +379,7 @@ export default function App() {
           requestAnimationFrame(animate);
           t += 0.003;
 
-          if (autoRotate) {
+          if (autoRotate && enableRotationRef.current) {
             scene.rotation.y = t * 0.3;
             scene.rotation.x = Math.sin(t * 0.12) * 0.15;
           }
@@ -400,7 +406,7 @@ export default function App() {
             
           }
 
-          controls.update();
+          if (enableRotationRef.current) controls.update();
           Object.values(meshes).forEach((m) => {
             const vtc = m.userData.vtc;
             const base = homePositions[vtc];
@@ -425,11 +431,13 @@ export default function App() {
             
           });
 
-          Object.values(meshes).forEach((m) => {
-            const step = m.userData.step || 0;
-            m.rotation.x += 0.001 + step * 0.00001;
-            m.rotation.y += 0.0015 + step * 0.000015;
-          });
+          if (enableRotationRef.current) {
+Object.values(meshes).forEach((m) => {
+  const step = m.userData.step || 0;
+  m.rotation.x += 0.001 + step * 0.00001;
+  m.rotation.y += 0.0015 + step * 0.000015;
+});
+}
 
           Object.values(meshes).forEach((m) => {
             if (!m.userData.rot) {
@@ -474,7 +482,7 @@ export default function App() {
 
   return (
     <>
-      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
+      <OptionsMenu enableRotationRef.current={enableRotationRef.current} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -664,7 +672,7 @@ function buildCrystalFromPairs(pairs) {
 
 
 // --- OPTIONS MENU ---
-function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {
+function OptionsMenu({ enableRotationRef.current, setEnableRotation, showMenu, setShowMenu }) {
   if (!showMenu) return null;
 
   return (
@@ -684,8 +692,8 @@ function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu 
       <label style={{ display: "block" }}>
         <input
           type="checkbox"
-          checked={enableRotation}
-          onChange={() => setEnableRotation(!enableRotation)}
+          checked={enableRotationRef.current}
+          onChange={() => setEnableRotation(!enableRotationRef.current)}
         /> Rotation
       </label>
 

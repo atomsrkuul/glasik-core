@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
@@ -102,8 +101,6 @@ function makeArrow(from, to, color) {
 export default function App() {
   const ref = useRef(null);
   const [selected, setSelected] = useState(null);
-  const [showMenu, setShowMenu] = useState(true);
-  const [enableRotation, setEnableRotation] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
@@ -111,7 +108,6 @@ export default function App() {
 
   const playheadRef = useRef(null);
   const meshesRef = useRef({});
-  const selectedRef = useRef(null);
   const stepsRef = useRef([]);
 
   useEffect(() => {
@@ -156,10 +152,7 @@ export default function App() {
     scene.add(fill);
 
     const meshes = {};
-        const pickables = [];
     const shardCenters = {};
-    const homePositions = {};
-    const velocities = {};
     const shardData = {};
     const particles = [];
     const edgeMeshes = [];
@@ -194,8 +187,6 @@ export default function App() {
           const oz = R * Math.cos(phi);
 
           shardCenters[vtc] = new THREE.Vector3(ox, oy, oz);
-          homePositions[vtc] = new THREE.Vector3(ox, oy, oz);
-          velocities[vtc] = new THREE.Vector3(0, 0, 0);
           shardData[vtc] = {
             vtc,
             type: node.type,
@@ -204,55 +195,48 @@ export default function App() {
             step: idx,
           };
 
-          const geo = buildCrystalFromPairs(node.pairs || []) || buildCrystalGeometry(vtc);
+          const geo = buildCrystalGeometry(vtc);
           const mat = new THREE.MeshPhongMaterial({
-            flatShading: true,
             color,
             emissive: new THREE.Color(color).multiplyScalar(0.2),
-            shininess: 220,
+            shininess: 160,
             specular: 0xffffff,
-            transparent: false,
-            opacity: 1.0,
+            transparent: true,
+            opacity: 0.88,
             side: THREE.DoubleSide,
           });
 
-          const mesh = new THREE.Mesh(geo, mat.clone());
+          const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(ox, oy, oz);
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
-          mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.6);
+          mesh.scale.setScalar(scale * crystalSize);
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
 
-          const pickMesh = new THREE.Mesh(
-            new THREE.SphereGeometry(5, 12, 12),
-            new THREE.MeshBasicMaterial({ visible: false })
-          );
-          pickMesh.position.copy(mesh.position);
-          pickMesh.userData = { vtc };
-          scene.add(pickMesh);
-          pickables.push(pickMesh);
-
-          const clickShell = new THREE.Mesh(
-            new THREE.SphereGeometry(4, 12, 12),
-            new THREE.MeshBasicMaterial({ visible: false })
-          );
-          clickShell.userData = { vtc, step: idx };
-          mesh.add(clickShell);
-
-          const hitGeo = new THREE.SphereGeometry(6, 8, 8);
+          const hitGeo = new THREE.SphereGeometry(3, 8, 8);
           const hitMat = new THREE.MeshBasicMaterial({ visible: false });
           const hitMesh = new THREE.Mesh(hitGeo, hitMat);
           hitMesh.position.copy(mesh.position);
           hitMesh.userData = mesh.userData;
           scene.add(hitMesh);
 
-          meshes[vtc] = mesh;
+          meshes[vtc] = hitMesh;
           meshesRef.current = meshes;
 
-          // wireframe disabled for clarity
+          const wire = new THREE.Mesh(
+            geo,
+            new THREE.MeshBasicMaterial({
+              color: new THREE.Color(color).multiplyScalar(0.35),
+              wireframe: true,
+              transparent: true,
+              opacity: 0.25,
+            })
+          );
+          wire.position.copy(mesh.position);
+          wire.scale.copy(mesh.scale);
+          scene.add(wire);
 
           const glowGeo = new THREE.SphereGeometry(0.6, 8, 8);
           const glow = new THREE.Mesh(
@@ -260,7 +244,6 @@ export default function App() {
             new THREE.MeshBasicMaterial({
               color,
               transparent: true,
-            depthWrite: false,
               opacity: 0.9,
             })
           );
@@ -323,32 +306,23 @@ export default function App() {
         });
 
         renderer.domElement.addEventListener("click", (e) => {
-          const rect = renderer.domElement.getBoundingClientRect();
-          mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-          mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+          mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+          mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
           raycaster.setFromCamera(mouse, camera);
           raycaster.params.Mesh = raycaster.params.Mesh || {};
           raycaster.params.Mesh.threshold = 2;
-          const hits = raycaster.intersectObjects(pickables, false);
+          const hits = raycaster.intersectObjects(Object.values(meshes));
 
           if (hits.length > 0) {
             const vtc = hits[0].object.userData.vtc;
             setSelected(shardData[vtc]);
-            selectedRef.current = vtc;
-
-            if (enableRotation) Object.values(meshes).forEach((m) => {
-              if (!m.material) return;
-              const isSelected = m.userData.vtc === vtc;
-
-              const baseColor = TYPE_COLOR[shardData[m.userData.vtc]?.type] || 0x44ff44;
-              const color = new THREE.Color(baseColor).offsetHSL(0, 0, 0.15);
-
-              m.material.color.set(color);            });
 
             Object.values(meshes).forEach((m) => {
-              if (!m.material) return;
-              const isSelected = m.userData.vtc === vtc;
-              
+              m.material.emissive.set(
+                m.userData.vtc === vtc
+                  ? new THREE.Color(TYPE_COLOR[shardData[vtc]?.type] || 0x44ff44).multiplyScalar(0.6)
+                  : new THREE.Color(TYPE_COLOR[shardData[m.userData.vtc]?.type] || 0x44ff44).multiplyScalar(0.2)
+              );
             });
           }
         });
@@ -395,56 +369,7 @@ export default function App() {
             m.visible = m.userData.step <= ph;
           });
 
-          // drift (safe)
-          for (const m of Object.values(meshes)) {
-            
-          }
-
           controls.update();
-          Object.values(meshes).forEach((m) => {
-            const vtc = m.userData.vtc;
-            const base = homePositions[vtc];
-            if (!base) return;
-
-            const driftX = Math.sin(t + (m.userData.step || 0)) * 1.0;
-            const driftY = Math.cos(t * 0.8 + (m.userData.step || 0)) * 2.0;
-
-            
-          });
-
-          Object.values(meshes).forEach((m) => {
-            const vtc = m.userData.vtc;
-            const base = homePositions[vtc];
-            if (!base) return;
-
-            const driftX = Math.sin(t + (m.userData.step || 0)) * 1.5;
-            const driftY = Math.cos(t * 0.8 + (m.userData.step || 0)) * 3.0;
-
-            
-            
-            
-          });
-
-          Object.values(meshes).forEach((m) => {
-            const step = m.userData.step || 0;
-            m.rotation.x += 0.001 + step * 0.00001;
-            m.rotation.y += 0.0015 + step * 0.000015;
-          });
-
-          Object.values(meshes).forEach((m) => {
-            if (!m.userData.rot) {
-              m.userData.rot = {
-                x: (Math.random() - 0.5) * 0.01,
-                y: (Math.random() - 0.5) * 0.01,
-                z: (Math.random() - 0.5) * 0.01
-              };
-            }
-
-            m.rotation.x += m.userData.rot.x;
-            m.rotation.y += m.userData.rot.y;
-            m.rotation.z += m.userData.rot.z;
-          });
-
           composer.render();
         }
 
@@ -474,7 +399,6 @@ export default function App() {
 
   return (
     <>
-      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -595,13 +519,6 @@ export default function App() {
         <br />
         <span style={{ color: "rgba(255,255,255,0.2)" }}>scroll · drag · click</span>
       </div>
-    
-      {!showMenu && (
-        <button
-          onClick={() => setShowMenu(true)}
-          style={{ position: "fixed", top: 20, left: 20, zIndex: 10 }}
-        >☰</button>
-      )}
     </>
   );
 }
@@ -611,87 +528,27 @@ function buildCrystalFromPairs(pairs) {
     return new THREE.SphereGeometry(0.5, 6, 6);
   }
 
-  const pointsVec = [];
+  const geometry = new THREE.BufferGeometry();
+  const vertices = [];
 
-  const freq = {};
-  pairs.forEach(({ lit }) => {
-    freq[lit] = (freq[lit] || 0) + 1;
-  });
-
-  const total = pairs.length;
-  let entropy = 0;
-  Object.values(freq).forEach((c) => {
-    const p = c / total;
-    entropy -= p * Math.log2(p);
-  });
-
-  const heightScale = 0.6 + Math.min(1.5, entropy);
-
-  const densityFactor = Math.min(3, pairs.length / 10);
-
-  pairs.forEach(({ lit, tok }, i) => {
-    for (let d = 0; d < densityFactor; d++) {
-    const angle = (tok * 0.3) + (lit % 11) * 0.25 + Math.sin(tok * 0.7) * 0.5;
+  pairs.forEach(({ lit, tok }) => {
+    const angle = tok * 0.3;
     const radius = Math.min(2.5, Math.log2(lit + 1));
 
-    const skewX = 0.5 + (lit % 7) * 0.18;
-    const skewY = 0.5 + (tok % 9) * 0.15;
-    const skewZ = 0.3 + ((lit + tok) % 11) * 0.12;
+    const x = Math.cos(angle) * radius;
+    const y = Math.sin(angle) * radius;
+    const z = tok * 0.05;
 
-    const x = (Math.sin(tok * 1.3) + Math.cos(lit * 0.7)) * radius * skewX;
-    const y = (Math.cos(tok * 0.9) - Math.sin(lit * 1.1)) * radius * skewY;
-    const z = (Math.sin(tok * 0.5 + lit * 0.3)) * radius * skewZ;
-
-    pointsVec.push(new THREE.Vector3(x, y, z));
-    }
+    vertices.push(x, y, z);
   });
 
-  const geometry = new ConvexGeometry(pointsVec);
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute(vertices, 3)
+  );
 
-  geometry.computeBoundingBox();
-  const center = new THREE.Vector3();
-  geometry.boundingBox.getCenter(center);
-  geometry.translate(-center.x, -center.y, -center.z);
-
-  
-  geometry.computeBoundingSphere();
-  const radius = geometry.boundingSphere.radius || 1;
-  const scale = 4.5 / radius;
-  geometry.scale(scale, scale, scale);
+  geometry.computeVertexNormals();
 
   return geometry;
 }
 
-
-// --- OPTIONS MENU ---
-function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {
-  if (!showMenu) return null;
-
-  return (
-    <div style={{
-      position: "fixed",
-      top: 20,
-      left: 20,
-      background: "rgba(0,0,0,0.6)",
-      padding: 12,
-      borderRadius: 8,
-      fontFamily: "monospace",
-      fontSize: 12,
-      color: "#00ffcc"
-    }}>
-      <div style={{ marginBottom: 8 }}>OPTIONS</div>
-
-      <label style={{ display: "block" }}>
-        <input
-          type="checkbox"
-          checked={enableRotation}
-          onChange={() => setEnableRotation(!enableRotation)}
-        /> Rotation
-      </label>
-
-      <button onClick={() => setShowMenu(false)} style={{ marginTop: 8 }}>
-        Close
-      </button>
-    </div>
-  );
-}

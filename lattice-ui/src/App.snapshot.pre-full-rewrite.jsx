@@ -108,6 +108,8 @@ export default function App() {
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
   const [crystalSize, setCrystalSize] = useState(1.0);
+  const [rotationSpeed, setRotationSpeed] = useState(1.0);
+  const [uiCrystalSize, setUiCrystalSize] = useState(1.0);
 
   const playheadRef = useRef(null);
   const meshesRef = useRef({});
@@ -440,9 +442,9 @@ export default function App() {
               };
             }
 
-            m.rotation.x += m.userData.rot.x;
-            m.rotation.y += m.userData.rot.y;
-            m.rotation.z += m.userData.rot.z;
+            m.rotation.x += m.userData.rot.x * rotationSpeed;
+            m.rotation.y += m.userData.rot.y * rotationSpeed;
+            m.rotation.z += m.userData.rot.z * rotationSpeed;
           });
 
           composer.render();
@@ -474,7 +476,7 @@ export default function App() {
 
   return (
     <>
-      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
+      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} rotationSpeed={rotationSpeed} setRotationSpeed={setRotationSpeed} uiCrystalSize={uiCrystalSize} setUiCrystalSize={setUiCrystalSize} />
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -495,8 +497,7 @@ export default function App() {
             boxShadow: "0 0 20px rgba(0,255,136,0.15)",
           }}
         >
-          <div style={{ color: "#ffffff88", fontSize: 11, marginBottom: 6 }}>CRYSTAL IDENTITY</div>
-          <div style={{ wordBreak: "break-all", marginBottom: 4 }}>{selected.vtc}</div>
+          <div style={{ color: "#ffffff88", fontSize: 11, marginBottom: 6 }}>CRYSTAL IDENTITY<div style={{ wordBreak: "break-all", marginBottom: 4 }}>{selected.vtc}</div>
           <div style={{ color: "#ffffff66", marginTop: 8, fontSize: 11 }}>
             type: <span style={{ color: "#fff" }}>{selected.type}</span>
             &nbsp;·&nbsp;count: <span style={{ color: "#fff" }}>{selected.count}</span>
@@ -532,7 +533,6 @@ export default function App() {
             weight: <span style={{ color: "#fff" }}>{hoveredEdge.weight}</span>
           </div>
         </div>
-      )}
 
       <div
         style={{
@@ -601,7 +601,7 @@ export default function App() {
           onClick={() => setShowMenu(true)}
           style={{ position: "fixed", top: 20, left: 20, zIndex: 10 }}
         >☰</button>
-      )}
+      )}> setUiCrystalSize(parseFloat(e.target.value))}
     </>
   );
 }
@@ -664,7 +664,7 @@ function buildCrystalFromPairs(pairs) {
 
 
 // --- OPTIONS MENU ---
-function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {
+function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu, rotationSpeed, setRotationSpeed, uiCrystalSize, setUiCrystalSize }) {
   if (!showMenu) return null;
 
   return (
@@ -685,8 +685,7 @@ function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu 
         <input
           type="checkbox"
           checked={enableRotation}
-          onChange={() => setEnableRotation(!enableRotation)}
-        /> Rotation
+          onChange={() => setEnableRotation(!enableRotation)} Rotation
       </label>
 
       <button onClick={() => setShowMenu(false)} style={{ marginTop: 8 }}>

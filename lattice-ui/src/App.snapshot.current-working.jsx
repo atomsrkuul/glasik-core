@@ -102,8 +102,6 @@ function makeArrow(from, to, color) {
 export default function App() {
   const ref = useRef(null);
   const [selected, setSelected] = useState(null);
-  const [showMenu, setShowMenu] = useState(true);
-  const [enableRotation, setEnableRotation] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
@@ -336,7 +334,7 @@ export default function App() {
             setSelected(shardData[vtc]);
             selectedRef.current = vtc;
 
-            if (enableRotation) Object.values(meshes).forEach((m) => {
+            Object.values(meshes).forEach((m) => {
               if (!m.material) return;
               const isSelected = m.userData.vtc === vtc;
 
@@ -474,7 +472,6 @@ export default function App() {
 
   return (
     <>
-      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -595,13 +592,6 @@ export default function App() {
         <br />
         <span style={{ color: "rgba(255,255,255,0.2)" }}>scroll · drag · click</span>
       </div>
-    
-      {!showMenu && (
-        <button
-          onClick={() => setShowMenu(true)}
-          style={{ position: "fixed", top: 20, left: 20, zIndex: 10 }}
-        >☰</button>
-      )}
     </>
   );
 }
@@ -662,36 +652,3 @@ function buildCrystalFromPairs(pairs) {
   return geometry;
 }
 
-
-// --- OPTIONS MENU ---
-function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {
-  if (!showMenu) return null;
-
-  return (
-    <div style={{
-      position: "fixed",
-      top: 20,
-      left: 20,
-      background: "rgba(0,0,0,0.6)",
-      padding: 12,
-      borderRadius: 8,
-      fontFamily: "monospace",
-      fontSize: 12,
-      color: "#00ffcc"
-    }}>
-      <div style={{ marginBottom: 8 }}>OPTIONS</div>
-
-      <label style={{ display: "block" }}>
-        <input
-          type="checkbox"
-          checked={enableRotation}
-          onChange={() => setEnableRotation(!enableRotation)}
-        /> Rotation
-      </label>
-
-      <button onClick={() => setShowMenu(false)} style={{ marginTop: 8 }}>
-        Close
-      </button>
-    </div>
-  );
-}

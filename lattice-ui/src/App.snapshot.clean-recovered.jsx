@@ -102,8 +102,6 @@ function makeArrow(from, to, color) {
 export default function App() {
   const ref = useRef(null);
   const [selected, setSelected] = useState(null);
-  const [showMenu, setShowMenu] = useState(true);
-  const [enableRotation, setEnableRotation] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
@@ -221,7 +219,7 @@ export default function App() {
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
           mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.6);
+          mesh.scale.setScalar(scale * crystalSize * 1.5);
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
@@ -260,7 +258,6 @@ export default function App() {
             new THREE.MeshBasicMaterial({
               color,
               transparent: true,
-            depthWrite: false,
               opacity: 0.9,
             })
           );
@@ -336,7 +333,7 @@ export default function App() {
             setSelected(shardData[vtc]);
             selectedRef.current = vtc;
 
-            if (enableRotation) Object.values(meshes).forEach((m) => {
+            Object.values(meshes).forEach((m) => {
               if (!m.material) return;
               const isSelected = m.userData.vtc === vtc;
 
@@ -395,56 +392,7 @@ export default function App() {
             m.visible = m.userData.step <= ph;
           });
 
-          // drift (safe)
-          for (const m of Object.values(meshes)) {
-            
-          }
-
           controls.update();
-          Object.values(meshes).forEach((m) => {
-            const vtc = m.userData.vtc;
-            const base = homePositions[vtc];
-            if (!base) return;
-
-            const driftX = Math.sin(t + (m.userData.step || 0)) * 1.0;
-            const driftY = Math.cos(t * 0.8 + (m.userData.step || 0)) * 2.0;
-
-            
-          });
-
-          Object.values(meshes).forEach((m) => {
-            const vtc = m.userData.vtc;
-            const base = homePositions[vtc];
-            if (!base) return;
-
-            const driftX = Math.sin(t + (m.userData.step || 0)) * 1.5;
-            const driftY = Math.cos(t * 0.8 + (m.userData.step || 0)) * 3.0;
-
-            
-            
-            
-          });
-
-          Object.values(meshes).forEach((m) => {
-            const step = m.userData.step || 0;
-            m.rotation.x += 0.001 + step * 0.00001;
-            m.rotation.y += 0.0015 + step * 0.000015;
-          });
-
-          Object.values(meshes).forEach((m) => {
-            if (!m.userData.rot) {
-              m.userData.rot = {
-                x: (Math.random() - 0.5) * 0.01,
-                y: (Math.random() - 0.5) * 0.01,
-                z: (Math.random() - 0.5) * 0.01
-              };
-            }
-
-            m.rotation.x += m.userData.rot.x;
-            m.rotation.y += m.userData.rot.y;
-            m.rotation.z += m.userData.rot.z;
-          });
-
           composer.render();
         }
 
@@ -474,7 +422,6 @@ export default function App() {
 
   return (
     <>
-      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -595,13 +542,6 @@ export default function App() {
         <br />
         <span style={{ color: "rgba(255,255,255,0.2)" }}>scroll · drag · click</span>
       </div>
-    
-      {!showMenu && (
-        <button
-          onClick={() => setShowMenu(true)}
-          style={{ position: "fixed", top: 20, left: 20, zIndex: 10 }}
-        >☰</button>
-      )}
     </>
   );
 }
@@ -634,13 +574,13 @@ function buildCrystalFromPairs(pairs) {
     const angle = (tok * 0.3) + (lit % 11) * 0.25 + Math.sin(tok * 0.7) * 0.5;
     const radius = Math.min(2.5, Math.log2(lit + 1));
 
-    const skewX = 0.5 + (lit % 7) * 0.18;
-    const skewY = 0.5 + (tok % 9) * 0.15;
-    const skewZ = 0.3 + ((lit + tok) % 11) * 0.12;
+    const skewX = 0.6 + (lit % 5) * 0.1;
+    const skewY = 0.6 + (tok % 7) * 0.08;
+    const skewZ = 0.4 + ((lit + tok) % 9) * 0.06;
 
-    const x = (Math.sin(tok * 1.3) + Math.cos(lit * 0.7)) * radius * skewX;
-    const y = (Math.cos(tok * 0.9) - Math.sin(lit * 1.1)) * radius * skewY;
-    const z = (Math.sin(tok * 0.5 + lit * 0.3)) * radius * skewZ;
+    const x = Math.cos(angle) * radius * skewX * (0.8 + heightScale * 0.2);
+    const y = Math.sin(angle) * radius * skewY * (0.8 + heightScale * 0.2);
+    const z = tok * 0.05 * skewZ * (0.6 + heightScale * 0.6);
 
     pointsVec.push(new THREE.Vector3(x, y, z));
     }
@@ -662,36 +602,3 @@ function buildCrystalFromPairs(pairs) {
   return geometry;
 }
 
-
-// --- OPTIONS MENU ---
-function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {
-  if (!showMenu) return null;
-
-  return (
-    <div style={{
-      position: "fixed",
-      top: 20,
-      left: 20,
-      background: "rgba(0,0,0,0.6)",
-      padding: 12,
-      borderRadius: 8,
-      fontFamily: "monospace",
-      fontSize: 12,
-      color: "#00ffcc"
-    }}>
-      <div style={{ marginBottom: 8 }}>OPTIONS</div>
-
-      <label style={{ display: "block" }}>
-        <input
-          type="checkbox"
-          checked={enableRotation}
-          onChange={() => setEnableRotation(!enableRotation)}
-        /> Rotation
-      </label>
-
-      <button onClick={() => setShowMenu(false)} style={{ marginTop: 8 }}>
-        Close
-      </button>
-    </div>
-  );
-}
