@@ -283,8 +283,7 @@ export default function AppLite() {
           edges.push({ from: keys[i], to: keys[i + 1], step: i });
         }
 
-        // Draw organic curved tubes with pulses
-        const tubeRadius = 0.15;
+        // Create pulse paths (curves only, no visible tubes)
         const edgeData = [];
 
         edges.forEach(({ from, to, step }) => {
@@ -302,26 +301,15 @@ export default function AppLite() {
           mid.add(offset);
 
           const curve = new THREE.CatmullRomCurve3([fromMesh.pos, mid, toMesh.pos]);
-          const tubeGeom = new THREE.TubeGeometry(curve, 12, tubeRadius, 4, false);
-          const mat = new THREE.MeshPhongMaterial({
-            color: 0x00ff88,
-            emissive: 0x00ff88,
-            emissiveIntensity: 0.4,
-            shininess: 100,
-            specular: 0xffffff,
-          });
-          const tube = new THREE.Mesh(tubeGeom, mat);
-          tube.userData = { type: 'edge', step, from, to };
-          scene.add(tube);
-          edgeData.push({ curve, step, tube });
+          edgeData.push({ curve, step });
         });
 
-        // Create pulse point objects
-        const pulseGeom = new THREE.SphereGeometry(0.4, 8, 8);
+        // Create glowing pulse point objects
+        const pulseGeom = new THREE.SphereGeometry(0.5, 12, 12);
         const pulseMat = new THREE.MeshPhongMaterial({
           color: 0x00ff88,
-          emissive: 0xffffff,
-          emissiveIntensity: 1.0,
+          emissive: 0x00ff88,
+          emissiveIntensity: 1.2,
           shininess: 200,
           specular: 0xffffff,
         });
@@ -349,13 +337,13 @@ export default function AppLite() {
             data.mesh.rotation.y += 0.0015 + (data.mesh.userData.step || 0) * 0.000015;
           });
 
-          // Animate pulse points moving through tubes
-          const time = Date.now() * 0.0005;
+          // Animate pulse points flowing along curves
+          const time = Date.now() * 0.0008;
           if (meshesRef.current._pulses) {
             meshesRef.current._pulses.forEach((pulse) => {
               const curve = pulse.userData.curve;
               if (!curve) return;
-              const t = (time + pulse.userData.step * 0.2) % 1.0;
+              const t = (time + pulse.userData.step * 0.15) % 1.0;
               pulse.position.copy(curve.getPoint(t));
             });
           }
