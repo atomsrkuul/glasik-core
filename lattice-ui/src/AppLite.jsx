@@ -11,6 +11,15 @@ import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js"
 
 console.log("[AppLite] Component initializing...");
 
+// Import TubeGeometry
+const setupGeometries = () => {
+  if (!THREE.TubeGeometry) {
+    console.warn('[AppLite] TubeGeometry not available, using LineBasicMaterial fallback');
+  }
+};
+
+setupGeometries();
+
 const TYPE_COLOR = {
   user_intent: 0xff8800,
   user: 0xff8800,
@@ -298,22 +307,25 @@ export default function AppLite() {
           }
         });
 
-        // Draw flow edges
+        // Draw flow edges (solid tubes)
+        const tubeRadius = 0.5;
         edges.forEach(({ from, to, step }) => {
           const fromMesh = meshesRef.current[from];
           const toMesh = meshesRef.current[to];
           if (!fromMesh || !toMesh) return;
 
-          const points = [fromMesh.pos, toMesh.pos];
-          const geom = new THREE.BufferGeometry().setFromPoints(points);
-          const mat = new THREE.LineBasicMaterial({
+          const curve = new THREE.LineCurve3(fromMesh.pos, toMesh.pos);
+          const tubeGeom = new THREE.TubeGeometry(curve, 4, tubeRadius, 6, false);
+          const mat = new THREE.MeshStandardMaterial({
             color: 0x00ff88,
-            linewidth: 1,
-            transparent: true,
-            opacity: 0.3,
+            emissive: 0x00ff88,
+            emissiveIntensity: 0.3,
+            metalness: 0.7,
+            roughness: 0.2,
           });
-          const line = new THREE.Line(geom, mat);
-          scene.add(line);
+          const tube = new THREE.Mesh(tubeGeom, mat);
+          tube.userData = { type: 'edge', step, from, to };
+          scene.add(tube);
         });
 
         console.log(`[AppLite] ✓ All shards rendered (${keys.length} shards, ${edges.length} flows), starting animation...`);
@@ -329,10 +341,13 @@ export default function AppLite() {
             mesh.rotation.y += 0.0015 + (mesh.userData.step || 0) * 0.000015;
           });
 
-          // Pulse edges based on time
+          // Animate pulse flowing through edges
+          const time = Date.now() * 0.001;
           scene.children.forEach((child) => {
-            if (child instanceof THREE.Line && child.material.color.getHex() === 0x00ff88) {
-              child.material.opacity = 0.2 + Math.sin(Date.now() * 0.003) * 0.15;
+            if (child.userData?.type === 'edge') {
+              const pulse = (time + child.userData.step * 0.1) % 1.0;
+              const intensity = Math.max(0.1, 0.8 - Math.abs(pulse - 0.5) * 2);
+              child.material.emissiveIntensity = intensity;
             }
           });
 
@@ -361,7 +376,7 @@ export default function AppLite() {
       window.removeEventListener("resize", handleResize);
       ref.current?.removeChild(renderer.domElement);
     };
-  }, []);
+  }, [shardScale]);
 
   return (
     <>
