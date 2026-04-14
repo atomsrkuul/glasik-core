@@ -28,6 +28,7 @@ enum Job {
     LoadSnapshot { path: String, resp: oneshot::Sender<String> },
     CompressFractal { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<Vec<u8>> },
     DecompressFractal { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
+    CompressFractalVtcV3 { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<napi::Result<String>> },
 }
 
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
@@ -328,6 +329,10 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                             .map(|v| v)
                             .map_err(|e| napi::Error::from_reason(e));
                         let _ = resp.send(out);
+                    }
+                    Job::CompressFractalVtcV3 { data, shard_type, session_id, resp } => {
+                        let (_frame, vtc) = fractal.compress_shard_with_vtc_v3(&data, &shard_type, &session_id);
+                        let _ = resp.send(Ok(vtc));
                     }
                     Job::ExportEntries { resp } => {
                         let (_, entries) = slider.export_dict();
@@ -637,15 +642,11 @@ pub async fn gn_compress_fractal_with_vtc(
     shard_type: String,
     session_id: String,
 ) -> Result<String> {
-    let frame = gn_compress_fractal(
-        data,
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressFractalVtcV3 {
+        data: data.to_vec(),
         shard_type,
-        session_id
-    ).await?;
-    use sha2::{Sha256, Digest};
-    let mut hasher = Sha256::new();
-    hasher.update(&frame);
-    let hash = hasher.finalize();
-    let hex = hex::encode(hash);
-    Ok(format!("VTC-v1-{}", &hex[..32]))
+        session_id,
+        resp: tx,
+    }, rx).await?
 }

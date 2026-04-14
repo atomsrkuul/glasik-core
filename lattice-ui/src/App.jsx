@@ -84,12 +84,16 @@ function buildCrystalGeometry(vtc) {
 }
 
 const TYPE_COLOR = {
-  user_intent: 0x00ff88,
-  assistant_response: 0x2288ff,
-  system_message: 0xff8800,
+  user_intent: 0xff8800,      // Orange
+  user: 0xff8800,             // Orange
+  assistant_response: 0x44ddff, // Light blue
+  assistant: 0x44ddff,        // Light blue
+  system_message: 0xff6600,   // Dark orange
   code_block: 0xffee00,
   tool_call: 0xdd00ff,
-  tool_result: 0x00eeff,
+  tool_result: 0xaa44ff,      // Purple
+  toolResult: 0xaa44ff,       // Purple
+  batch: 0x00ff00,            // Lime green
 };
 
 function makeArrow(from, to, color) {
@@ -107,7 +111,7 @@ export default function App() {
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
-  const [crystalSize, setCrystalSize] = useState(1.0);
+  const [crystalSize, setCrystalSize] = useState(0.8);  // Default to optimal viewing size
 
   const playheadRef = useRef(null);
   const meshesRef = useRef({});
@@ -123,7 +127,7 @@ export default function App() {
     scene.fog = new THREE.FogExp2(0x010408, 0.003);
 
     const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 5000);
-    camera.position.set(0, 30, 280);
+    camera.position.set(0, 0, 300);  // Centered on origin for better framing
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
@@ -135,10 +139,12 @@ export default function App() {
     ref.current.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, -5, 0);  // Center orbit point
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = 50;
     controls.maxDistance = 600;
+    controls.update();
 
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
@@ -190,7 +196,7 @@ export default function App() {
           const R = 130;
 
           const ox = R * Math.sin(phi) * Math.cos(theta);
-          const oy = R * Math.sin(phi) * Math.sin(theta);
+          const oy = R * Math.sin(phi) * Math.sin(theta) - 5;  // Slight downward offset for balance
           const oz = R * Math.cos(phi);
 
           shardCenters[vtc] = new THREE.Vector3(ox, oy, oz);
@@ -221,7 +227,7 @@ export default function App() {
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
           mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.6);
+          mesh.scale.setScalar((scale * crystalSize * 0.6) * 0.6);  // Inverted scaling
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
@@ -400,7 +406,7 @@ export default function App() {
             
           }
 
-          controls.update();
+      
           Object.values(meshes).forEach((m) => {
             const vtc = m.userData.vtc;
             const base = homePositions[vtc];
@@ -475,6 +481,30 @@ export default function App() {
   return (
     <>
       <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
+      
+      {/* Color Legend */}
+      <div style={{
+        position: "fixed",
+        bottom: 20,
+        right: 20,
+        background: "rgba(0,0,0,0.75)",
+        padding: 12,
+        borderRadius: 8,
+        fontFamily: "monospace",
+        fontSize: 11,
+        color: "#00ffcc",
+        backdropFilter: "blur(4px)",
+        border: "1px solid rgba(0,255,204,0.3)"
+      }}>
+        <div style={{ marginBottom: 8, fontWeight: "bold", fontSize: 12 }}>🗺️ LEGEND</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div><span style={{ color: "#ff8800", fontWeight: "bold" }}>■</span> User</div>
+          <div><span style={{ color: "#44ddff", fontWeight: "bold" }}>■</span> Assistant</div>
+          <div><span style={{ color: "#aa44ff", fontWeight: "bold" }}>■</span> Tool Result</div>
+          <div><span style={{ color: "#00ff00", fontWeight: "bold" }}>■</span> Batch</div>
+        </div>
+      </div>
+      
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -566,13 +596,14 @@ export default function App() {
         <span style={{ color: "rgba(0,180,255,0.6)", marginLeft: 16 }}>SIZE</span>
         <input
           type="range"
-          min={0.5}
+          min={0.3}
           max={2.0}
           step={0.05}
           value={crystalSize}
           onChange={(e) => setCrystalSize(parseFloat(e.target.value))}
           style={{ width: 120, accentColor: "#00ccff" }}
         />
+        <span style={{ color: "#00ccff", fontSize: 10, marginLeft: 8 }}>({crystalSize.toFixed(1)}x)</span>
 
         <span style={{ color: "#fff" }}>
           {(playhead ?? maxStep) + 1} / {maxStep + 1}
@@ -662,6 +693,8 @@ function buildCrystalFromPairs(pairs) {
   return geometry;
 }
 
+
+// --- COLOR LEGEND COMPONENT (inline above) ---
 
 // --- OPTIONS MENU ---
 function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {

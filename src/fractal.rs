@@ -12,6 +12,7 @@ use crate::tokenizer::dictionary::{DictEntry, build};
 use crate::tokenizer::codon::{
     build_tiered_ac, encode_ac_interleaved, decode_ac_interleaved
 };
+use sha2::{Sha256, Digest};
 use crate::level4;
 
 pub const PROMOTE_L3_THRESHOLD: u64 = 3;
@@ -99,7 +100,13 @@ impl FractalCompressor {
         let mut l3: Vec<DictEntry> = l3_raw.into_iter()
             .filter(|e| e.saving >= 2 && e.bytes.len() >= 4)
             .collect();
-        l3.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+        // Fully deterministic sort for consistent token ID assignment
+        l3.sort_unstable_by(|a, b| {
+            b.saving.cmp(&a.saving)
+                .then(b.bytes.len().cmp(&a.bytes.len()))
+                .then(b.freq.cmp(&a.freq))
+                .then(a.bytes.cmp(&b.bytes))
+        });
         l3.truncate(63);
 
         // Get L1 for this shard type
@@ -411,8 +418,189 @@ impl FractalCompressor {
         s.insert("l2_sessions".into(), self.l2_by_session.len());
         s
     }
-}
 
+
+    /// VTC v3 -- true crystal identity, collision-resistant by construction
+    /// SHA256(shard_type || session_id || canonical_pairs || literal_hash || sequence_fingerprint)
+    ///
+    /// canonical_pairs: fired L3 entries sorted saving DESC, len DESC, freq DESC, lex ASC
+    /// literal_hash: SHA256(raw literal stream)
+    /// sequence_fingerprint: FNV-1a rolling hash of pair emission order
+    pub fn compress_shard_with_vtc_v3(
+        &mut self,
+        data: &[u8],
+        shard_type: &str,
+        session_id: &str,
+    ) -> (Vec<u8>, String) {
+        let stype = ShardType::from_str(shard_type);
+
+        // Build L3
+        let l3_raw = build(data);
+        let mut l3: Vec<DictEntry> = l3_raw.into_iter()
+            .filter(|e| e.saving >= 2 && e.bytes.len() >= 4)
+            .collect();
+        // Fully deterministic sort -- saving DESC, len DESC, freq DESC, lex ASC
+        // This ensures L3 ID assignment is identical for identical input
+        l3.sort_unstable_by(|a, b| {
+            b.saving.cmp(&a.saving)
+                .then(b.bytes.len().cmp(&a.bytes.len()))
+                .then(b.freq.cmp(&a.freq))
+                .then(a.bytes.cmp(&b.bytes))
+        });
+        l3.truncate(63);
+
+        // Build AC for encoding
+        let l1 = self.l1_by_type.entry(stype.clone()).or_insert_with(Vec::new);
+        let l1_snap: Vec<DictEntry> = l1.clone();
+        let empty_l2: Vec<DictEntry> = Vec::new();
+        let ac = build_tiered_ac(&self.l0, &l1_snap, &empty_l2, &l3);
+
+        // Encode -- collect pairs stream and literals stream
+        // We need the RAW pairs (before deflate) for VTC construction
+        let (pairs_raw, literals_raw) = if let Some(ref ac_inner) = ac {
+            encode_ac_interleaved(data, ac_inner)
+        } else {
+            let trailing = (data.len() as u16).to_le_bytes();
+            (trailing.to_vec(), data.to_vec())
+        };
+
+        // Cache AC
+        self.cached_ac = ac;
+        self.ac_dirty = false;
+        self.last_shard_type = Some(stype.clone());
+        self.last_session_id = Some(session_id.to_string());
+
+        // === VTC v3 CONSTRUCTION ===
+
+        // 1. Canonical fired L3 pairs
+        //    Parse pairs_raw to find which L3 token IDs fired
+        //    Token IDs 192-254 = L3 (IDs 192+ in interleaved format)
+        //    pairs_raw format: [(2B lit_count LE)(1B tok_id)...][2B trailing_lits LE]
+        //    We decode the sequence of tok_ids to find fired L3 entries
+        let mut fired_ids: Vec<u8> = Vec::new(); // sequence of tok IDs emitted
+        {
+            let pr = &pairs_raw;
+            let mut i = 0usize;
+            while i + 2 < pr.len() {
+                let lit_count = u16::from_le_bytes([pr[i], pr[i+1]]) as usize;
+                i += 2;
+                if i >= pr.len() { break; }
+                let tok_id = pr[i];
+                i += 1;
+                fired_ids.push(tok_id);
+                // skip lit_count literals (they are in literals_raw, not here)
+                let _ = lit_count; // lit bytes are in literals stream
+            }
+            // last 2 bytes are trailing lit count, not a token
+        }
+
+        // Map fired IDs to L3 entries (L3 IDs = index+1 within l3 vec, offset by tier)
+        // In build_tiered_ac: L0 gets IDs 1-63, L1 gets 64-127, L2 gets 128-191, L3 gets 192-254
+        // So L3 entry[i] gets ID 192+i
+        let mut fired_l3: Vec<&DictEntry> = Vec::new();
+        for &id in &fired_ids {
+            if id >= 192 {
+                let idx = (id - 192) as usize;
+                if idx < l3.len() {
+                    fired_l3.push(&l3[idx]);
+                }
+            }
+        }
+
+        // Canonical sort: saving DESC, len DESC, freq DESC, lex ASC
+        let mut canonical: Vec<(usize, usize, usize, &[u8])> = fired_l3.iter()
+            .map(|e| (e.saving, e.bytes.len(), e.freq, e.bytes.as_slice()))
+            .collect();
+        // Deduplicate (same pattern may fire multiple times -- include once, sum freq)
+        canonical.sort_unstable_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(b.1.cmp(&a.1))
+                .then(b.2.cmp(&a.2))
+                .then(a.3.cmp(b.3))
+        });
+        canonical.dedup_by_key(|e| e.3);
+
+        // 2. Literal hash -- SHA256 of raw literal stream
+        let literal_hash = Sha256::digest(&literals_raw);
+
+        // 3. Sequence fingerprint -- FNV-1a over tok_id emission order
+        let mut fnv: u64 = 0xcbf29ce484222325;
+        for &id in &fired_ids {
+            fnv ^= id as u64;
+            fnv = fnv.wrapping_mul(0x100000001b3);
+        }
+
+        // 4. Assemble VTC input
+        let mut vtc_input: Vec<u8> = Vec::new();
+        // shard_type byte
+        vtc_input.push(self.shard_type_byte(&stype));
+        // session_id bytes
+        vtc_input.extend_from_slice(session_id.as_bytes());
+        // canonical pairs: each entry as (saving u32 LE)(len u32 LE)(freq u32 LE)(pattern bytes)
+        for (saving, len, freq, pat) in &canonical {
+            vtc_input.extend_from_slice(&(*saving as u32).to_le_bytes());
+            vtc_input.extend_from_slice(&(*len as u32).to_le_bytes());
+            vtc_input.extend_from_slice(&(*freq as u32).to_le_bytes());
+            vtc_input.extend_from_slice(pat);
+        }
+        // literal hash (32 bytes)
+        vtc_input.extend_from_slice(&literal_hash);
+        // sequence fingerprint (8 bytes)
+        vtc_input.extend_from_slice(&fnv.to_le_bytes());
+
+        // Final SHA256
+        let vtc_hash = Sha256::digest(&vtc_input);
+        let vtc = format!("VTC-v3-{}", hex::encode(&vtc_hash));
+
+        // Build frame directly -- do NOT call compress_shard_with_pairs again
+        // (that would mutate state and break VTC determinism)
+        // Serialize L3
+        let mut l3_ser: Vec<u8> = Vec::new();
+        for e in &l3 {
+            if e.bytes.len() <= 255 {
+                l3_ser.push(e.bytes.len() as u8);
+                l3_ser.extend_from_slice(&e.bytes);
+            }
+        }
+
+        // Deflate pairs and literals
+        use flate2::{write::DeflateEncoder, Compression};
+        use std::io::Write;
+        let pairs_deflated = {
+            let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+            let _ = enc.write_all(&pairs_raw);
+            enc.finish().expect("deflate pairs failed")
+        };
+        let lits_deflated = {
+            let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+            let _ = enc.write_all(&literals_raw);
+            enc.finish().expect("deflate literals failed")
+        };
+
+        // Update L2 and promote -- state mutation happens AFTER VTC is computed
+        let l2 = self.l2_by_session.entry(session_id.to_string())
+            .or_insert_with(SlidingTokenizerV2::new);
+        let _ = l2.encode(data);
+        self.promote_l3_to_l2(&l3, session_id);
+        self.promote_l2_to_l1(&stype, session_id);
+
+        // Assemble frame: [1B shard_type][2B pairs_len LE][2B l3_ser_len LE][l3_ser][deflated pairs][deflated literals]
+        let mut frame = Vec::with_capacity(5 + l3_ser.len() + pairs_deflated.len() + lits_deflated.len());
+        frame.push(self.shard_type_byte(&stype));
+        frame.extend_from_slice(&(pairs_deflated.len() as u16).to_le_bytes());
+        frame.extend_from_slice(&(l3_ser.len() as u16).to_le_bytes());
+        frame.extend_from_slice(&l3_ser);
+        frame.extend_from_slice(&pairs_deflated);
+        frame.extend_from_slice(&lits_deflated);
+
+        (frame, vtc)
+    }
+
+    /// Alias for compress_shard_with_pairs (used in tests and legacy callers)
+    pub fn compress_shard(&mut self, data: &[u8], shard_type: &str, session_id: &str) -> Vec<u8> {
+        self.compress_shard_with_pairs(data, shard_type, session_id)
+    }
+}
 impl Default for FractalCompressor {
     fn default() -> Self { Self::new() }
 }
