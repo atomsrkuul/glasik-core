@@ -1,6 +1,6 @@
 {
   "name": "gn-native",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "main": "index.js",
   "napi": {
     "name": "gn-native",
@@ -14,5 +14,20 @@
   },
   "devDependencies": {
     "@napi-rs/cli": "latest"
+  },
+  "description": "Domain-adaptive lossless compression for LLM conversation streams",
+  "keywords": [
+    "compression",
+    "llm",
+    "rust",
+    "napi",
+    "brotli",
+    "deflate"
+  ],
+  "author": "Robert Rider <atomsrkuul@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/atomsrkuul/glasik-core"
   }
 }
