@@ -11,14 +11,7 @@ import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js"
 
 console.log("[AppLite] Component initializing...");
 
-// Import TubeGeometry
-const setupGeometries = () => {
-  if (!THREE.TubeGeometry) {
-    console.warn('[AppLite] TubeGeometry not available, using LineBasicMaterial fallback');
-  }
-};
 
-setupGeometries();
 
 const TYPE_COLOR = {
   user_intent: 0xff8800,
@@ -307,21 +300,22 @@ export default function AppLite() {
           }
         });
 
-        // Draw flow edges (solid tubes)
-        const tubeRadius = 0.5;
+        // Draw flow edges (thin solid tubes)
+        const tubeRadius = 0.15;
         edges.forEach(({ from, to, step }) => {
           const fromMesh = meshesRef.current[from];
           const toMesh = meshesRef.current[to];
           if (!fromMesh || !toMesh) return;
 
           const curve = new THREE.LineCurve3(fromMesh.pos, toMesh.pos);
-          const tubeGeom = new THREE.TubeGeometry(curve, 4, tubeRadius, 6, false);
-          const mat = new THREE.MeshStandardMaterial({
+          const tubeGeom = new THREE.TubeGeometry(curve, 2, tubeRadius, 4, false);
+          const mat = new THREE.MeshPhongMaterial({
             color: 0x00ff88,
             emissive: 0x00ff88,
-            emissiveIntensity: 0.3,
-            metalness: 0.7,
-            roughness: 0.2,
+            emissiveIntensity: 0.5,
+            shininess: 100,
+            specular: 0xffffff,
+            transparent: false,
           });
           const tube = new THREE.Mesh(tubeGeom, mat);
           tube.userData = { type: 'edge', step, from, to };
@@ -342,11 +336,11 @@ export default function AppLite() {
           });
 
           // Animate pulse flowing through edges
-          const time = Date.now() * 0.001;
+          const time = Date.now() * 0.002;
           scene.children.forEach((child) => {
             if (child.userData?.type === 'edge') {
-              const pulse = (time + child.userData.step * 0.1) % 1.0;
-              const intensity = Math.max(0.1, 0.8 - Math.abs(pulse - 0.5) * 2);
+              const pulse = (time + child.userData.step * 0.15) % 1.0;
+              const intensity = 0.4 + Math.sin(pulse * Math.PI) * 0.3;
               child.material.emissiveIntensity = intensity;
             }
           });
