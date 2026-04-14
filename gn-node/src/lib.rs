@@ -245,6 +245,7 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                             let (toks, lits) = slider.encode_ac_split(chunk);
                             all_toks.extend_from_slice(&toks);
                             all_lits.extend_from_slice(&lits);
+                            let _ = slider.encode(chunk); // update window vocab -- matches PyO3 path
                         }
                         let _ = resp.send(split_deflate(all_toks, all_lits));
                     }
