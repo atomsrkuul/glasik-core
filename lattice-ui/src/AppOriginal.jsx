@@ -81,7 +81,7 @@ export default function App() {
     scene.fog = new THREE.FogExp2(0x010408, 0.003);
 
     const camera = new THREE.PerspectiveCamera(60, W/H, 0.1, 5000);
-    camera.position.set(0, 30, 280);
+    camera.position.set(0, 50, 400);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
