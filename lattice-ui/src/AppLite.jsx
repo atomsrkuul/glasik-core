@@ -253,7 +253,11 @@ export default function AppLite() {
         const keys = Object.keys(graph);
         const total = keys.length;
 
+        const edges = [];
+        const shardMap = {};
+        
         keys.forEach((vtc, idx) => {
+          shardMap[vtc] = idx;
           const node = graph[vtc];
           const color = TYPE_COLOR[node.type] || 0x44ff44;
 
@@ -283,10 +287,36 @@ export default function AppLite() {
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
 
-          meshesRef.current[vtc] = { mesh, baseScale };
+          meshesRef.current[vtc] = { mesh, baseScale, pos: new THREE.Vector3(ox, oy, oz) };
         });
 
-        console.log("[AppLite] ✓ All shards rendered, starting animation...");
+        // Build edge connections (temporal flow)
+        keys.forEach((vtc, idx) => {
+          if (idx < keys.length - 1) {
+            const nextVtc = keys[idx + 1];
+            edges.push({ from: vtc, to: nextVtc, step: idx });
+          }
+        });
+
+        // Draw flow edges
+        edges.forEach(({ from, to, step }) => {
+          const fromMesh = meshesRef.current[from];
+          const toMesh = meshesRef.current[to];
+          if (!fromMesh || !toMesh) return;
+
+          const points = [fromMesh.pos, toMesh.pos];
+          const geom = new THREE.BufferGeometry().setFromPoints(points);
+          const mat = new THREE.LineBasicMaterial({
+            color: 0x00ff88,
+            linewidth: 1,
+            transparent: true,
+            opacity: 0.3,
+          });
+          const line = new THREE.Line(geom, mat);
+          scene.add(line);
+        });
+
+        console.log(`[AppLite] ✓ All shards rendered (${keys.length} shards, ${edges.length} flows), starting animation...`);
 
         function animate() {
           requestAnimationFrame(animate);
@@ -294,8 +324,16 @@ export default function AppLite() {
           controls.update();
 
           Object.values(meshesRef.current).forEach(({ mesh }) => {
+            if (!mesh.userData.vtc) return;
             mesh.rotation.x += 0.001 + (mesh.userData.step || 0) * 0.00001;
             mesh.rotation.y += 0.0015 + (mesh.userData.step || 0) * 0.000015;
+          });
+
+          // Pulse edges based on time
+          scene.children.forEach((child) => {
+            if (child instanceof THREE.Line && child.material.color.getHex() === 0x00ff88) {
+              child.material.opacity = 0.2 + Math.sin(Date.now() * 0.003) * 0.15;
+            }
           });
 
           renderer.render(scene, camera);
