@@ -294,13 +294,15 @@ export default function AppLite() {
         position: "fixed",
         bottom: 20,
         left: 20,
-        background: "rgba(0,0,0,0.8)",
+        background: "rgba(0,0,0,0.9)",
         padding: "12px 16px",
         borderRadius: "6px",
         color: "#0f0",
         fontFamily: "monospace",
         fontSize: "12px",
-        border: "1px solid rgba(0,255,0,0.3)"
+        border: "1px solid rgba(0,255,0,0.5)",
+        zIndex: 1000,
+        pointerEvents: "auto"
       }}>
         Size: {shardScale.toFixed(2)}x
         <input
@@ -314,8 +316,11 @@ export default function AppLite() {
             display: "block", 
             marginTop: "8px", 
             width: "120px",
-            accentColor: "#0f0"
+            accentColor: "#0f0",
+            cursor: "pointer"
           }}
+          onTouchStart={(e) => e.preventDefault()}
+          onTouchMove={(e) => e.preventDefault()}
         />
       </div>
     </div>
