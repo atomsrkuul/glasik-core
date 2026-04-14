@@ -1,10 +1,10 @@
 /**
- * AppLite - Lightweight lattice viewer
+ * AppLite - Lightweight lattice viewer with size slider
  * Loads lattice.json with timeout protection
  * Renders THREE.js canvas without heavy state management
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
@@ -110,7 +110,18 @@ function buildCrystalGeometry(vtc) {
 
 export default function AppLite() {
   const ref = useRef(null);
+  const [shardScale, setShardScale] = useState(0.5);
+  const meshesRef = useRef({});
 
+  // Update shard scales when slider changes
+  useEffect(() => {
+    Object.entries(meshesRef.current).forEach(([vtc, data]) => {
+      const { mesh, baseScale } = data;
+      mesh.scale.setScalar(baseScale * shardScale);
+    });
+  }, [shardScale]);
+
+  // Initialize scene
   useEffect(() => {
     console.log("[AppLite] useEffect starting...");
 
@@ -203,28 +214,26 @@ export default function AppLite() {
           const mesh = new THREE.Mesh(geo, mat.clone());
           mesh.position.set(ox, oy, oz);
 
-          const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
-          mesh.scale.setScalar(scale * 0.6);
+          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3;
+          mesh.scale.setScalar(baseScale * shardScale);
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
+
+          meshesRef.current[vtc] = { mesh, baseScale };
         });
 
         console.log("[AppLite] ✓ All shards rendered, starting animation...");
 
-        let t = 0;
         function animate() {
           requestAnimationFrame(animate);
 
           controls.update();
 
-          Object.values(scene.children).forEach((m) => {
-            if (m.userData?.vtc) {
-              m.rotation.x += 0.001 + (m.userData.step || 0) * 0.00001;
-              m.rotation.y += 0.0015 + (m.userData.step || 0) * 0.000015;
-            }
+          Object.values(meshesRef.current).forEach(({ mesh }) => {
+            mesh.rotation.x += 0.001 + (mesh.userData.step || 0) * 0.00001;
+            mesh.rotation.y += 0.0015 + (mesh.userData.step || 0) * 0.000015;
           });
 
-          t += 0.016;
           renderer.render(scene, camera);
         }
 
@@ -279,6 +288,35 @@ export default function AppLite() {
         GN SHARD SPACE
         <br />
         <span style={{ color: "rgba(255,255,255,0.2)" }}>scroll · drag · click</span>
+      </div>
+
+      <div style={{
+        position: "fixed",
+        bottom: 20,
+        left: 20,
+        background: "rgba(0,0,0,0.8)",
+        padding: "12px 16px",
+        borderRadius: "6px",
+        color: "#0f0",
+        fontFamily: "monospace",
+        fontSize: "12px",
+        border: "1px solid rgba(0,255,0,0.3)"
+      }}>
+        Size: {shardScale.toFixed(2)}x
+        <input
+          type="range"
+          min="0.1"
+          max="2"
+          step="0.05"
+          value={shardScale}
+          onChange={(e) => setShardScale(parseFloat(e.target.value))}
+          style={{ 
+            display: "block", 
+            marginTop: "8px", 
+            width: "120px",
+            accentColor: "#0f0"
+          }}
+        />
       </div>
     </div>
   );
