@@ -262,32 +262,34 @@ export default function AppLite() {
   }, []);
 
   return (
-    <div
-      ref={ref}
-      style={{
-        width: "100vw",
-        height: "100vh",
-        margin: 0,
-        padding: 0,
-        overflow: "hidden",
-        background: "#010408",
-      }}
-    >
+    <>
       <div
+        ref={ref}
         style={{
-          position: "fixed",
-          top: 16,
-          right: 16,
-          color: "rgba(0,255,136,0.4)",
-          fontFamily: "monospace",
-          fontSize: 11,
-          textAlign: "right",
-          pointerEvents: "none",
+          width: "100vw",
+          height: "100vh",
+          margin: 0,
+          padding: 0,
+          overflow: "hidden",
+          background: "#010408",
         }}
       >
-        GN SHARD SPACE
-        <br />
-        <span style={{ color: "rgba(255,255,255,0.2)" }}>scroll · drag · click</span>
+        <div
+          style={{
+            position: "fixed",
+            top: 16,
+            right: 16,
+            color: "rgba(0,255,136,0.4)",
+            fontFamily: "monospace",
+            fontSize: 11,
+            textAlign: "right",
+            pointerEvents: "none",
+          }}
+        >
+          GN SHARD SPACE
+          <br />
+          <span style={{ color: "rgba(255,255,255,0.2)" }}>scroll · drag · click</span>
+        </div>
       </div>
 
       <div style={{
@@ -319,10 +321,8 @@ export default function AppLite() {
             accentColor: "#0f0",
             cursor: "pointer"
           }}
-          onTouchStart={(e) => e.preventDefault()}
-          onTouchMove={(e) => e.preventDefault()}
         />
       </div>
-    </div>
+    </>
   );
 }
