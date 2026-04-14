@@ -34,6 +34,33 @@ enum Job {
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
 static FAST_TOK: OnceLock<std::sync::Mutex<GNPrefixTokenizer<4>>> = OnceLock::new();
 static HYBRID_ENC: OnceLock<std::sync::Mutex<glasik_core::tokenizer::hybrid_async::HybridAsyncEncoder>> = OnceLock::new();
+// Sync slider for split-stream sync path -- mutex-locked, no tokio channel
+static SYNC_SLIDER: OnceLock<std::sync::Mutex<glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2>> = OnceLock::new();
+
+fn get_sync_slider() -> &'static std::sync::Mutex<glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2> {
+    SYNC_SLIDER.get_or_init(|| {
+        let mut slider = glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2::new();
+        // Load snapshot into sync slider
+        let snap_path = std::path::Path::new("/home/boot/.openclaw/gn-window.snapshot");
+        if snap_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(snap_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(entries) = json["entries"].as_array() {
+                        let parsed: Vec<(Vec<u8>, u64, u64)> = entries.iter().filter_map(|e| {
+                            let b: Vec<u8> = e["b"].as_array()?.iter()
+                                .filter_map(|x| x.as_u64().map(|v| v as u8)).collect();
+                            Some((b, e["f"].as_u64()?, e["s"].as_u64()?))
+                        }).collect();
+                        let n = parsed.len();
+                        slider.import_dict(1, parsed);
+                        eprintln!("GN-SYNC: loaded {} entries into sync slider", n);
+                    }
+                }
+            }
+        }
+        std::sync::Mutex::new(slider)
+    })
+}
 
 // Thread-local GNHybridEncoder -- fastest path, no locks
 use std::cell::RefCell;
@@ -241,11 +268,11 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         // This is where beats-brotli ratio comes from
                         let mut all_toks: Vec<u8> = Vec::new();
                         let mut all_lits: Vec<u8> = Vec::new();
+                        // Encode all chunks using current AC -- no window update
                         for chunk in &chunks {
                             let (toks, lits) = slider.encode_ac_split(chunk);
                             all_toks.extend_from_slice(&toks);
                             all_lits.extend_from_slice(&lits);
-                            let _ = slider.encode(chunk); // update window vocab -- matches PyO3 path
                         }
                         let _ = resp.send(split_deflate(all_toks, all_lits));
                     }
@@ -465,6 +492,23 @@ pub async fn gn_refresh_vocab() -> Result<u32> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::RefreshVocab { resp: tx }, rx).await
         .map(|n| n as u32)
+}
+
+/// Sync split-stream batch -- no tokio channel, lab-equivalent latency
+/// Use for latency-sensitive paths where async overhead is unacceptable
+#[napi]
+pub fn gn_compress_split_batch_sync(chunks: Vec<Buffer>) -> Buffer {
+    use glasik_core::tokenizer::codon::encode_ac_split;
+    let mut slider = get_sync_slider().lock().unwrap();
+    let mut all_toks: Vec<u8> = Vec::new();
+    let mut all_lits: Vec<u8> = Vec::new();
+    for chunk in &chunks {
+        let (toks, lits) = slider.encode_ac_split(chunk);
+        all_toks.extend_from_slice(&toks);
+        all_lits.extend_from_slice(&lits);
+        let _ = slider.encode(chunk); // update window
+    }
+    Buffer::from(split_deflate(all_toks, all_lits))
 }
 
 #[napi]
