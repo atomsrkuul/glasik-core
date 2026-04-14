@@ -166,6 +166,7 @@ impl SlidingTokenizerV2 {
                 self.window[idx].cumulative_freq += entry.freq as u64;
                 self.window[idx].last_seen = self.batch_count;
                 self.window[idx].saving += entry.saving as u64;
+                self.cached_entries.clear(); // invalidate cache on freq update
             } else if self.window.len() < MAX_WINDOW_ENTRIES {
                 let idx = self.window.len();
                 self.index.insert(entry.bytes.clone(), idx);
@@ -236,6 +237,21 @@ impl SlidingTokenizerV2 {
             self.index_dirty = false;
         }
         self.cached_index.as_ref().expect("cached_index must be Some after get_index build")
+    }
+
+
+    /// Directly credit a pattern's frequency in the window.
+    /// Used by FractalCompressor to feed L3 N-gram signal into L2
+    /// without running encode() which would sub-tokenize the pattern.
+    pub fn credit_pattern(&mut self, bytes: &[u8], freq: u64, saving: u64) {
+        let entry = crate::tokenizer::dictionary::DictEntry {
+            bytes: bytes.to_vec(),
+            freq: freq as usize,
+            saving: saving as usize,
+        };
+        if entry.saving >= MIN_SAVING_THRESHOLD {
+            self.update_window(std::slice::from_ref(&entry));
+        }
     }
 
     pub fn active_entries_pub(&self) -> Vec<DictEntry> { self.active_entries() }

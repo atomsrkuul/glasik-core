@@ -15,8 +15,8 @@ use crate::tokenizer::codon::{
 use sha2::{Sha256, Digest};
 use crate::level4;
 
-pub const PROMOTE_L3_THRESHOLD: u64 = 3;
-pub const PROMOTE_L2_THRESHOLD: u64 = 50;
+pub const PROMOTE_L3_THRESHOLD: u64 = 2;
+pub const PROMOTE_L2_THRESHOLD: u64 = 8;
 pub const L1_MAX_ENTRIES: usize = 64;
 pub const L2_MAX_ENTRIES: usize = 64;
 
@@ -262,7 +262,7 @@ impl FractalCompressor {
             .or_insert_with(SlidingTokenizerV2::new);
         for e in l3 {
             if e.freq as u64 >= PROMOTE_L3_THRESHOLD {
-                let _ = l2.encode(&e.bytes); // ingest pattern to boost its freq
+                l2.credit_pattern(&e.bytes, e.freq as u64, e.saving as u64);
             }
         }
         self.ac_dirty = true;
