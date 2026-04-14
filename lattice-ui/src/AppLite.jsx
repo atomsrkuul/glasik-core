@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 console.log("[AppLite] Component initializing...");
 
@@ -62,44 +63,61 @@ function vtcToCrystal(vtc) {
 }
 
 function buildCrystalFromPairs(pairs) {
-  if (!pairs || pairs.length < 3) {
+  if (!pairs || pairs.length < 4) {
     return buildCrystalGeometry('VTC-v1-default');
   }
 
   const pointsVec = [];
+  const freq = {};
+  
   pairs.forEach(({ lit, tok }) => {
-    const angle = (tok * 0.3) + (lit % 11) * 0.25 + Math.sin(tok * 0.7) * 0.5;
-    const radius = Math.min(2.5, Math.log2(lit + 1));
-    const x = (Math.sin(tok * 1.3) + Math.cos(lit * 0.7)) * radius;
-    const y = (Math.cos(tok * 0.9) - Math.sin(lit * 1.1)) * radius;
-    const z = (Math.sin(tok * 0.5 + lit * 0.3)) * radius;
-    pointsVec.push(new THREE.Vector3(x, y, z));
+    freq[lit] = (freq[lit] || 0) + 1;
   });
 
-  if (pointsVec.length < 3) return buildCrystalGeometry('VTC-v1-default');
+  const total = pairs.length;
+  let entropy = 0;
+  Object.values(freq).forEach((c) => {
+    const p = c / total;
+    entropy -= p * Math.log2(p);
+  });
 
-  const geo = new THREE.BufferGeometry();
-  const verts = [];
-  const norms = [];
+  const heightScale = 0.6 + Math.min(1.5, entropy);
+  const densityFactor = Math.min(3, pairs.length / 10);
 
-  // Simple convex hull approximation: connect pairs in sequence
-  for (let i = 0; i < pointsVec.length - 2; i++) {
-    const a = pointsVec[i];
-    const b = pointsVec[i + 1];
-    const c = pointsVec[i + 2];
-    const n = new THREE.Vector3().crossVectors(
-      new THREE.Vector3().subVectors(b, a),
-      new THREE.Vector3().subVectors(c, a)
-    ).normalize();
-    [a, b, c].forEach((p) => {
-      verts.push(p.x, p.y, p.z);
-      norms.push(n.x, n.y, n.z);
-    });
+  pairs.forEach(({ lit, tok }) => {
+    for (let d = 0; d < densityFactor; d++) {
+      const angle = (tok * 0.3) + (lit % 11) * 0.25 + Math.sin(tok * 0.7) * 0.5;
+      const radius = Math.min(2.5, Math.log2(lit + 1));
+      const skewX = 0.5 + (lit % 7) * 0.18;
+      const skewY = 0.5 + (tok % 9) * 0.15;
+      const skewZ = 0.3 + ((lit + tok) % 11) * 0.12;
+      
+      const x = (Math.sin(tok * 1.3) + Math.cos(lit * 0.7)) * radius * skewX;
+      const y = (Math.cos(tok * 0.9) - Math.sin(lit * 1.1)) * radius * skewY;
+      const z = (Math.sin(tok * 0.5 + lit * 0.3)) * radius * skewZ;
+      
+      pointsVec.push(new THREE.Vector3(x, y, z));
+    }
+  });
+
+  if (pointsVec.length < 4) return buildCrystalGeometry('VTC-v1-default');
+
+  try {
+    const geo = new ConvexGeometry(pointsVec);
+    geo.computeBoundingBox();
+    const center = new THREE.Vector3();
+    geo.boundingBox.getCenter(center);
+    geo.translate(-center.x, -center.y, -center.z);
+    
+    geo.computeBoundingSphere();
+    const radius = geo.boundingSphere.radius || 1;
+    const scale = 4.5 / radius;
+    geo.scale(scale, scale, scale);
+    
+    return geo;
+  } catch (e) {
+    return buildCrystalGeometry('VTC-v1-default');
   }
-
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
-  return geo;
 }
 
 function buildCrystalGeometry(vtc) {
@@ -182,11 +200,13 @@ export default function AppLite() {
     const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 5000);
     camera.position.set(0, 0, 300);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, precision: 'highp' });
     renderer.setSize(W, H);
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.2;
+    renderer.toneMappingExposure = 1.3;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFShadowShadowMap;
 
     console.log("[AppLite] ✓ Renderer created, appending to DOM...");
     ref.current.innerHTML = "";
@@ -200,15 +220,20 @@ export default function AppLite() {
     controls.maxDistance = 600;
     controls.update();
 
-    scene.add(new THREE.AmbientLight(0x112233, 2));
+    scene.add(new THREE.AmbientLight(0x334455, 1.5));
 
-    const dir = new THREE.DirectionalLight(0xffffff, 2.5);
-    dir.position.set(80, 120, 60);
+    const dir = new THREE.DirectionalLight(0xffffff, 3);
+    dir.position.set(100, 150, 80);
+    dir.castShadow = true;
     scene.add(dir);
 
-    const fill = new THREE.DirectionalLight(0x334466, 1);
-    fill.position.set(-80, -40, -60);
+    const fill = new THREE.DirectionalLight(0x6688cc, 1.5);
+    fill.position.set(-100, -50, -80);
     scene.add(fill);
+
+    const rim = new THREE.DirectionalLight(0xff6600, 0.8);
+    rim.position.set(0, 0, -150);
+    scene.add(rim);
 
     console.log("[AppLite] ✓ Scene setup complete, fetching lattice.json...");
 
@@ -241,14 +266,12 @@ export default function AppLite() {
           const oz = R * Math.cos(phi);
 
           const geo = buildCrystalFromPairs(node.pairs) || buildCrystalGeometry(vtc);
-          const mat = new THREE.MeshPhongMaterial({
-            flatShading: true,
+          const mat = new THREE.MeshStandardMaterial({
             color,
-            emissive: new THREE.Color(color).multiplyScalar(0.2),
-            shininess: 220,
-            specular: 0xffffff,
-            transparent: false,
-            opacity: 1.0,
+            emissive: new THREE.Color(color).multiplyScalar(0.15),
+            metalness: 0.6,
+            roughness: 0.2,
+            flatShading: true,
             side: THREE.DoubleSide,
           });
 
