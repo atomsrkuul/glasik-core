@@ -61,6 +61,47 @@ function vtcToCrystal(vtc) {
   return { points, upperCount, lowerCount };
 }
 
+function buildCrystalFromPairs(pairs) {
+  if (!pairs || pairs.length < 3) {
+    return buildCrystalGeometry('VTC-v1-default');
+  }
+
+  const pointsVec = [];
+  pairs.forEach(({ lit, tok }) => {
+    const angle = (tok * 0.3) + (lit % 11) * 0.25 + Math.sin(tok * 0.7) * 0.5;
+    const radius = Math.min(2.5, Math.log2(lit + 1));
+    const x = (Math.sin(tok * 1.3) + Math.cos(lit * 0.7)) * radius;
+    const y = (Math.cos(tok * 0.9) - Math.sin(lit * 1.1)) * radius;
+    const z = (Math.sin(tok * 0.5 + lit * 0.3)) * radius;
+    pointsVec.push(new THREE.Vector3(x, y, z));
+  });
+
+  if (pointsVec.length < 3) return buildCrystalGeometry('VTC-v1-default');
+
+  const geo = new THREE.BufferGeometry();
+  const verts = [];
+  const norms = [];
+
+  // Simple convex hull approximation: connect pairs in sequence
+  for (let i = 0; i < pointsVec.length - 2; i++) {
+    const a = pointsVec[i];
+    const b = pointsVec[i + 1];
+    const c = pointsVec[i + 2];
+    const n = new THREE.Vector3().crossVectors(
+      new THREE.Vector3().subVectors(b, a),
+      new THREE.Vector3().subVectors(c, a)
+    ).normalize();
+    [a, b, c].forEach((p) => {
+      verts.push(p.x, p.y, p.z);
+      norms.push(n.x, n.y, n.z);
+    });
+  }
+
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
+  return geo;
+}
+
 function buildCrystalGeometry(vtc) {
   const { points, upperCount, lowerCount } = vtcToCrystal(vtc);
   const geo = new THREE.BufferGeometry();
@@ -199,7 +240,7 @@ export default function AppLite() {
           const oy = R * Math.sin(phi) * Math.sin(theta) - 5;
           const oz = R * Math.cos(phi);
 
-          const geo = buildCrystalGeometry(vtc);
+          const geo = buildCrystalFromPairs(node.pairs) || buildCrystalGeometry(vtc);
           const mat = new THREE.MeshPhongMaterial({
             flatShading: true,
             color,
