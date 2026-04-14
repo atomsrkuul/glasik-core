@@ -1,7 +1,5 @@
 /**
- * AppLite - Lightweight lattice viewer with size slider
- * Loads lattice.json with timeout protection
- * Renders THREE.js canvas without heavy state management
+ * AppLite - Lightweight lattice viewer with organic flowing pulses
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -10,8 +8,6 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { ConvexGeometry } from "three/examples/jsm/geometries/ConvexGeometry.js";
 
 console.log("[AppLite] Component initializing...");
-
-
 
 const TYPE_COLOR = {
   user_intent: 0xff8800,
@@ -25,44 +21,6 @@ const TYPE_COLOR = {
   toolResult: 0xaa44ff,
   batch: 0x00ff00,
 };
-
-function vtcToCrystal(vtc) {
-  const hex = vtc.replace("VTC-v1-", "");
-  const bytes = [];
-  for (let i = 0; i < hex.length; i += 2) {
-    bytes.push(parseInt(hex.substr(i, 2), 16));
-  }
-  const n = bytes.length;
-  const points = [];
-  const height = 8 + (bytes[0] % 8);
-  points.push(new THREE.Vector3(0, height, 0));
-
-  const upperCount = 4 + (bytes[1] % 3);
-  for (let i = 0; i < upperCount; i++) {
-    const b = bytes[(2 + i) % n];
-    const angle = (i / upperCount) * Math.PI * 2 + (b / 255) * 0.8;
-    const radius = 3 + (b % 5);
-    const y = 1 + (bytes[(3 + i) % n] % 4);
-    points.push(
-      new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
-    );
-  }
-
-  const lowerCount = upperCount + (bytes[9 % n] % 2);
-  for (let i = 0; i < lowerCount; i++) {
-    const b = bytes[(10 + i) % n];
-    const angle = (i / lowerCount) * Math.PI * 2 + (b / 255) * 0.6;
-    const radius = 4 + (b % 6);
-    const y = -(1 + (bytes[(12 + i) % n] % 3));
-    points.push(
-      new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
-    );
-  }
-
-  const depth = -(5 + (bytes[n - 1] % 6));
-  points.push(new THREE.Vector3(0, depth, 0));
-  return { points, upperCount, lowerCount };
-}
 
 function buildCrystalFromPairs(pairs) {
   if (!pairs || pairs.length < 4) {
@@ -123,7 +81,41 @@ function buildCrystalFromPairs(pairs) {
 }
 
 function buildCrystalGeometry(vtc) {
-  const { points, upperCount, lowerCount } = vtcToCrystal(vtc);
+  const hex = vtc.replace("VTC-v1-", "");
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substr(i, 2), 16));
+  }
+  const n = bytes.length;
+  const points = [];
+  const height = 8 + (bytes[0] % 8);
+  points.push(new THREE.Vector3(0, height, 0));
+
+  const upperCount = 4 + (bytes[1] % 3);
+  for (let i = 0; i < upperCount; i++) {
+    const b = bytes[(2 + i) % n];
+    const angle = (i / upperCount) * Math.PI * 2 + (b / 255) * 0.8;
+    const radius = 3 + (b % 5);
+    const y = 1 + (bytes[(3 + i) % n] % 4);
+    points.push(
+      new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
+    );
+  }
+
+  const lowerCount = upperCount + (bytes[9 % n] % 2);
+  for (let i = 0; i < lowerCount; i++) {
+    const b = bytes[(10 + i) % n];
+    const angle = (i / lowerCount) * Math.PI * 2 + (b / 255) * 0.6;
+    const radius = 4 + (b % 6);
+    const y = -(1 + (bytes[(12 + i) % n] % 3));
+    points.push(
+      new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius)
+    );
+  }
+
+  const depth = -(5 + (bytes[n - 1] % 6));
+  points.push(new THREE.Vector3(0, depth, 0));
+
   const geo = new THREE.BufferGeometry();
   const verts = [];
   const norms = [];
@@ -172,17 +164,16 @@ function buildCrystalGeometry(vtc) {
 export default function AppLite() {
   const ref = useRef(null);
   const [shardScale, setShardScale] = useState(0.5);
-  const meshesRef = useRef({});
+  const meshesRef = useRef({ _pulses: [], _edgeData: [] });
 
-  // Update shard scales when slider changes
   useEffect(() => {
     Object.entries(meshesRef.current).forEach(([vtc, data]) => {
-      const { mesh, baseScale } = data;
-      mesh.scale.setScalar(baseScale * shardScale);
+      if (data.mesh && data.baseScale) {
+        data.mesh.scale.setScalar(data.baseScale * shardScale);
+      }
     });
   }, [shardScale]);
 
-  // Initialize scene
   useEffect(() => {
     console.log("[AppLite] useEffect starting...");
 
@@ -208,7 +199,6 @@ export default function AppLite() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.3;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFShadowShadowMap;
 
     console.log("[AppLite] ✓ Renderer created, appending to DOM...");
     ref.current.innerHTML = "";
@@ -226,7 +216,6 @@ export default function AppLite() {
 
     const dir = new THREE.DirectionalLight(0xffffff, 3);
     dir.position.set(100, 150, 80);
-    dir.castShadow = true;
     scene.add(dir);
 
     const fill = new THREE.DirectionalLight(0x6688cc, 1.5);
@@ -254,12 +243,9 @@ export default function AppLite() {
 
         const keys = Object.keys(graph);
         const total = keys.length;
-
         const edges = [];
-        const shardMap = {};
-        
+
         keys.forEach((vtc, idx) => {
-          shardMap[vtc] = idx;
           const node = graph[vtc];
           const color = TYPE_COLOR[node.type] || 0x44ff44;
 
@@ -286,64 +272,93 @@ export default function AppLite() {
 
           const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3;
           mesh.scale.setScalar(baseScale * shardScale);
-          mesh.userData = { vtc, step: idx };
+          mesh.userData = { vtc, step: idx, type: 'shard' };
           scene.add(mesh);
 
-          meshesRef.current[vtc] = { mesh, baseScale, pos: new THREE.Vector3(ox, oy, oz) };
+          meshesRef.current[vtc] = { mesh, baseScale, pos: new THREE.Vector3(ox, oy, oz), id: vtc };
         });
 
-        // Build edge connections (temporal flow)
-        keys.forEach((vtc, idx) => {
-          if (idx < keys.length - 1) {
-            const nextVtc = keys[idx + 1];
-            edges.push({ from: vtc, to: nextVtc, step: idx });
-          }
-        });
+        // Build edge connections
+        for (let i = 0; i < keys.length - 1; i++) {
+          edges.push({ from: keys[i], to: keys[i + 1], step: i });
+        }
 
-        // Draw flow edges (thin solid tubes)
+        // Draw organic curved tubes with pulses
         const tubeRadius = 0.15;
+        const edgeData = [];
+
         edges.forEach(({ from, to, step }) => {
           const fromMesh = meshesRef.current[from];
           const toMesh = meshesRef.current[to];
           if (!fromMesh || !toMesh) return;
 
-          const curve = new THREE.LineCurve3(fromMesh.pos, toMesh.pos);
-          const tubeGeom = new THREE.TubeGeometry(curve, 2, tubeRadius, 4, false);
+          // Create organic curved path
+          const mid = new THREE.Vector3().addVectors(fromMesh.pos, toMesh.pos).multiplyScalar(0.5);
+          const offset = new THREE.Vector3(
+            Math.sin(step * 0.5) * 20,
+            Math.cos(step * 0.3) * 15,
+            Math.sin(step * 0.7) * 15
+          );
+          mid.add(offset);
+
+          const curve = new THREE.CatmullRomCurve3([fromMesh.pos, mid, toMesh.pos]);
+          const tubeGeom = new THREE.TubeGeometry(curve, 12, tubeRadius, 4, false);
           const mat = new THREE.MeshPhongMaterial({
             color: 0x00ff88,
             emissive: 0x00ff88,
-            emissiveIntensity: 0.5,
+            emissiveIntensity: 0.4,
             shininess: 100,
             specular: 0xffffff,
-            transparent: false,
           });
           const tube = new THREE.Mesh(tubeGeom, mat);
           tube.userData = { type: 'edge', step, from, to };
           scene.add(tube);
+          edgeData.push({ curve, step, tube });
         });
 
-        console.log(`[AppLite] ✓ All shards rendered (${keys.length} shards, ${edges.length} flows), starting animation...`);
+        // Create pulse point objects
+        const pulseGeom = new THREE.SphereGeometry(0.4, 8, 8);
+        const pulseMat = new THREE.MeshPhongMaterial({
+          color: 0x00ff88,
+          emissive: 0xffffff,
+          emissiveIntensity: 1.0,
+          shininess: 200,
+          specular: 0xffffff,
+        });
+
+        edgeData.forEach(({ curve, step }, idx) => {
+          const pulse = new THREE.Mesh(pulseGeom, pulseMat.clone());
+          pulse.userData = { type: 'pulse', curve, step, idx };
+          scene.add(pulse);
+          meshesRef.current._pulses.push(pulse);
+        });
+        meshesRef.current._edgeData = edgeData;
+
+        console.log(`[AppLite] ✓ Rendered ${keys.length} shards, ${edges.length} tubes, ${edgeData.length} pulses`);
 
         function animate() {
           requestAnimationFrame(animate);
 
           controls.update();
 
-          Object.values(meshesRef.current).forEach(({ mesh }) => {
-            if (!mesh.userData.vtc) return;
-            mesh.rotation.x += 0.001 + (mesh.userData.step || 0) * 0.00001;
-            mesh.rotation.y += 0.0015 + (mesh.userData.step || 0) * 0.000015;
+          // Rotate shards
+          Object.entries(meshesRef.current).forEach(([key, data]) => {
+            if (key.startsWith('_') || !data.mesh) return;
+            if (!data.mesh.userData.vtc) return;
+            data.mesh.rotation.x += 0.001 + (data.mesh.userData.step || 0) * 0.00001;
+            data.mesh.rotation.y += 0.0015 + (data.mesh.userData.step || 0) * 0.000015;
           });
 
-          // Animate pulse flowing through edges
-          const time = Date.now() * 0.002;
-          scene.children.forEach((child) => {
-            if (child.userData?.type === 'edge') {
-              const pulse = (time + child.userData.step * 0.15) % 1.0;
-              const intensity = 0.4 + Math.sin(pulse * Math.PI) * 0.3;
-              child.material.emissiveIntensity = intensity;
-            }
-          });
+          // Animate pulse points moving through tubes
+          const time = Date.now() * 0.0005;
+          if (meshesRef.current._pulses) {
+            meshesRef.current._pulses.forEach((pulse) => {
+              const curve = pulse.userData.curve;
+              if (!curve) return;
+              const t = (time + pulse.userData.step * 0.2) % 1.0;
+              pulse.position.copy(curve.getPoint(t));
+            });
+          }
 
           renderer.render(scene, camera);
         }
@@ -370,7 +385,7 @@ export default function AppLite() {
       window.removeEventListener("resize", handleResize);
       ref.current?.removeChild(renderer.domElement);
     };
-  }, [shardScale]);
+  }, []);
 
   return (
     <>
