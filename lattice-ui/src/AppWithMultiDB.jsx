@@ -12,21 +12,18 @@ const DATABASES = [
     id: 'glasik',
     name: 'Glasik Memory',
     color: '#7c3aed',
-    csvPath: 'data/glasik-metrics.csv',
     description: 'My memories and identity (45 shards)'
   },
   {
     id: 'claude',
     name: 'Claude LLM',
     color: '#3b82f6',
-    csvPath: 'data/claude-metrics.csv',
     description: 'Claude API conversations'
   },
   {
     id: 'openclaw',
     name: 'OpenClaw Agent',
     color: '#10b981',
-    csvPath: '~/.openclaw/gn-metrics.csv',
     description: 'Real-time agent traffic (3570+ messages)'
   }
 ];
@@ -37,19 +34,21 @@ export default function AppWithMultiDB() {
   const [shardCounts, setShardCounts] = useState({});
 
   useEffect(() => {
-    // Check which databases have metrics available
+    // Check which databases have data available
     const checkDatabases = async () => {
       const status = {};
       const counts = {};
 
       for (const db of DATABASES) {
         try {
-          // Try to fetch metrics from lattice API
-          const response = await fetch(`/api/gn-metrics/${db.id}`, { signal: AbortSignal.timeout(2000) });
+          // Check if API endpoint responds
+          const response = await fetch(`http://localhost:18790/api/gn-metrics/${db.id}/stats`, { 
+            signal: AbortSignal.timeout(2000) 
+          });
           if (response.ok) {
             const data = await response.json();
             status[db.id] = 'active';
-            counts[db.id] = data.shards || 0;
+            counts[db.id] = data.metrics_records || 0;
           } else {
             status[db.id] = 'inactive';
             counts[db.id] = 0;
@@ -166,11 +165,7 @@ export default function AppWithMultiDB() {
       {/* Content */}
       <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
         {isActive ? (
-          <App 
-            dataSource={activeDb.csvPath}
-            databaseId={activeTab}
-            accentColor={activeDb.color}
-          />
+          <App />
         ) : (
           <div style={{
             display: 'flex',
@@ -183,7 +178,7 @@ export default function AppWithMultiDB() {
             <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>🔇</div>
             <div>No metrics available for {activeDb.name}</div>
             <div style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}>
-              Waiting for data...
+              Start the metrics API: metrics running on port 18790
             </div>
           </div>
         )}
