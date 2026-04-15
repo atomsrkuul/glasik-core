@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
-import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 
 const TYPE_COLOR = {
   user_intent:        0x00ff88,
@@ -82,36 +79,36 @@ function buildCrystalGeometry(vtc) {
 
 export default function AppDebug() {
   const ref = useRef(null);
-  const [selected, setSelected] = useState(null);
   const [debugLog, setDebugLog] = useState([]);
 
   const addLog = (msg) => {
-    setDebugLog(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`]);
-    console.log(msg);
+    const time = new Date().toLocaleTimeString();
+    const full = `[${time}] ${msg}`;
+    setDebugLog(prev => [...prev.slice(-30), full]);
+    console.log(full);
   };
 
   useEffect(() => {
-    addLog("🔵 useEffect starting...");
-
     const W = window.innerWidth, H = window.innerHeight;
-    addLog(`Canvas size: ${W} x ${H}`);
+    addLog(`Canvas ${W}x${H}`);
 
     const scene = new THREE.Scene();
-    addLog("✓ Scene created");
+    scene.background = new THREE.Color(0x000000);
+    addLog("Scene created");
 
     const camera = new THREE.PerspectiveCamera(60, W / H, 0.1, 5000);
     camera.position.set(0, 80, 600);
-    addLog(`✓ Camera at (0, 80, 600)`);
+    addLog("Camera @ (0,80,600)");
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.setClearColor(0x010408);
-    addLog("✓ Renderer created");
+    renderer.setClearColor(0x000000);
+    addLog("Renderer ready");
 
     ref.current.innerHTML = "";
     ref.current.appendChild(renderer.domElement);
-    addLog("✓ Renderer appended to DOM");
+    addLog("Canvas mounted");
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0);
@@ -120,45 +117,32 @@ export default function AppDebug() {
     controls.minDistance = 100;
     controls.maxDistance = 1200;
     controls.update();
-    addLog("✓ OrbitControls initialized");
+    addLog("Orbit controls ready");
 
-    // bloom
-    const composer = new EffectComposer(renderer);
-    composer.addPass(new RenderPass(scene, camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(W,H), 0.6, 0.4, 0.85);
-    composer.addPass(bloom);
-    addLog("✓ Bloom pass added");
-
-    // lights
-    scene.add(new THREE.AmbientLight(0x112233, 2));
-    const dir = new THREE.DirectionalLight(0xffffff, 2.5);
-    dir.position.set(80, 120, 60);
+    // Bright lights
+    scene.add(new THREE.AmbientLight(0xffffff, 2));
+    const dir = new THREE.DirectionalLight(0xffffff, 3.5);
+    dir.position.set(200, 200, 200);
     scene.add(dir);
-    const fill = new THREE.DirectionalLight(0x334466, 1);
-    fill.position.set(-80, -40, -60);
+    const fill = new THREE.DirectionalLight(0xffffff, 2);
+    fill.position.set(-200, -200, -200);
     scene.add(fill);
-    addLog("✓ Lights added");
+    addLog("3x bright lights");
 
     const meshes = {};
-    const shardCenters = {};
-    const shardData = {};
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    addLog("📡 Fetching /lattice.json...");
+    addLog("Fetching /lattice.json...");
+
     fetch("/lattice.json")
-      .then(r => {
-        addLog("✓ Fetch response received");
-        return r.json();
-      })
+      .then(r => r.json())
       .then(graph => {
-        addLog(`✓ JSON parsed, ${Object.keys(graph).length} shards`);
         const keys = Object.keys(graph);
         const total = keys.length;
+        addLog(`Loaded ${total} shards`);
 
-        addLog(`📍 Fibonacci sphere distribution (R=130):`);
         let minDist = Infinity, maxDist = 0;
-        const positions = [];
 
         keys.forEach((vtc, idx) => {
           const node = graph[vtc];
@@ -166,13 +150,11 @@ export default function AppDebug() {
 
           const phi = Math.acos(1 - (2 * (idx + 0.5)) / total);
           const theta = Math.PI * (1 + Math.sqrt(5)) * idx;
-          const R = 130;
+          const R = 150;
 
           const ox = R * Math.sin(phi) * Math.cos(theta);
-          const oy = R * Math.sin(phi) * Math.sin(theta) - 5;
+          const oy = R * Math.sin(phi) * Math.sin(theta);
           const oz = R * Math.cos(phi);
-
-          positions.push({ x: ox, y: oy, z: oz });
 
           const dist = Math.sqrt(ox*ox + oy*oy + oz*oz);
           minDist = Math.min(minDist, dist);
@@ -181,75 +163,72 @@ export default function AppDebug() {
           const geo = buildCrystalGeometry(vtc);
           const mat = new THREE.MeshPhongMaterial({
             color,
-            emissive: new THREE.Color(color).multiplyScalar(0.2),
+            emissive: new THREE.Color(color).multiplyScalar(0.3),
             shininess: 220,
             specular: 0xffffff,
-            wireframe: false,
+            side: THREE.DoubleSide,
+            flatShading: true,
           });
           const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(ox, oy, oz);
-          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3;
+          mesh.visible = true;
+          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.4;
           mesh.scale.setScalar(baseScale);
-          mesh.userData = { vtc, color, node };
+          mesh.userData = { vtc, color, index: idx };
           scene.add(mesh);
-
           meshes[vtc] = mesh;
-          shardCenters[vtc] = new THREE.Vector3(ox, oy, oz);
-          shardData[vtc] = node;
 
           if (idx < 3) {
-            addLog(`  [${idx}] ${vtc.slice(0, 12)}... → (${ox.toFixed(0)}, ${oy.toFixed(0)}, ${oz.toFixed(0)})`);
+            addLog(`  [${idx}] @ (${ox.toFixed(0)}, ${oy.toFixed(0)}, ${oz.toFixed(0)})`);
           }
         });
 
-        addLog(`✓ ${total} shards rendered`);
-        addLog(`  Distance range: ${minDist.toFixed(1)} to ${maxDist.toFixed(1)} from origin`);
-        addLog(`  Camera at (0, 80, 600), distance from origin: ${Math.sqrt(0*0 + 80*80 + 600*600).toFixed(1)}`);
+        addLog(`Shards at R=${minDist.toFixed(0)}-${maxDist.toFixed(0)}`);
+        addLog(`Scene: ${scene.children.length} objects`);
+        addLog(`Meshes: ${Object.keys(meshes).length} visible`);
 
-        // animation loop
+        let frameCount = 0;
         const animate = () => {
+          frameCount++;
+          if (frameCount === 1) {
+            addLog("Animation started!");
+          }
           requestAnimationFrame(animate);
           controls.update();
+          
           Object.values(meshes).forEach(m => {
             m.rotation.x += 0.0005;
             m.rotation.y += 0.001;
           });
-          composer.render();
+
+          renderer.render(scene, camera);
         };
 
-        addLog("▶️ Animation loop started");
-        animate();
+        // Expose for debugging
+        window.DEBUG = { scene, camera, renderer, meshes, controls };
 
-        // raycast
-        document.addEventListener("click", (e) => {
-          mouse.x = (e.clientX / W) * 2 - 1;
-          mouse.y = -(e.clientY / H) * 2 + 1;
-          raycaster.setFromCamera(mouse, camera);
-          const hits = raycaster.intersectObjects(Object.values(meshes));
-          if (hits.length > 0) {
-            const vtc = hits[0].object.userData.vtc;
-            setSelected(vtc);
-            addLog(`✓ Selected: ${vtc}`);
-          }
-        });
+        animate();
       })
       .catch(err => {
-        addLog(`❌ Error: ${err.message}`);
+        addLog(`ERROR: ${err.message}`);
+        console.error(err);
       });
 
     return () => {
-      addLog("🔴 Cleanup");
-      ref.current?.removeChild(renderer.domElement);
+      addLog("Cleanup");
+      if (ref.current?.children.length) {
+        ref.current.innerHTML = "";
+      }
     };
   }, []);
 
   return (
-    <div style={{ display: "flex", width: "100vw", height: "100vh" }}>
+    <div style={{ display: "flex", width: "100vw", height: "100vh", overflow: "hidden" }}>
       <div
         ref={ref}
         style={{
           flex: 1,
-          background: "#010408",
+          background: "#000",
           position: "relative",
         }}
       />
@@ -263,20 +242,17 @@ export default function AppDebug() {
           padding: 10,
           overflow: "auto",
           borderLeft: "2px solid #0f0",
+          boxSizing: "border-box",
         }}
       >
-        <div style={{ marginBottom: 10, fontWeight: "bold" }}>Debug Log</div>
+        <div style={{ marginBottom: 10, fontWeight: "bold", position: "sticky", top: 0, background: "#000", zIndex: 10 }}>
+          Debug Log
+        </div>
         {debugLog.map((msg, i) => (
-          <div key={i} style={{ marginBottom: 4, wordBreak: "break-all" }}>
+          <div key={i} style={{ marginBottom: 2, wordBreak: "break-word", fontSize: "10px", lineHeight: "1.2", color: msg.includes("ERROR") ? "#f00" : "#0f0" }}>
             {msg}
           </div>
         ))}
-        {selected && (
-          <div style={{ marginTop: 20, padding: 10, background: "#111", border: "1px solid #0f0" }}>
-            <div style={{ fontWeight: "bold" }}>Selected:</div>
-            <div style={{ wordBreak: "break-all" }}>{selected}</div>
-          </div>
-        )}
       </div>
     </div>
   );
