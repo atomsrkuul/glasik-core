@@ -114,7 +114,7 @@ export default function AppDebug() {
     addLog("✓ Renderer appended to DOM");
 
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, -5, 0);
+    controls.target.set(0, 0, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = 100;
