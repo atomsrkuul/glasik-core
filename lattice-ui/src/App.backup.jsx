@@ -474,18 +474,8 @@ export default function App() {
 
   return (
     <>
-      <div style={{ display: "flex", height: "30px", background: "rgba(0,0,0,0.9)", borderBottom: "1px solid rgba(0,255,136,0.3)", paddingLeft: "10px", alignItems: "center", zIndex: 100 }}>
-        <button onClick={() => setActiveTab('tab1')} style={{ background: activeTab === 'tab1' ? 'rgba(0,255,136,0.2)' : 'transparent', color: '#0f0', border: 'none', padding: '6px 12px', fontFamily: 'monospace', fontSize: '11px', cursor: 'pointer', borderBottom: activeTab === 'tab1' ? '2px solid #0f0' : '1px solid rgba(0,255,136,0.2)' }}>Lattice</button>
-        <button onClick={() => setActiveTab('tab2')} style={{ background: activeTab === 'tab2' ? 'rgba(0,255,136,0.2)' : 'transparent', color: '#0f0', border: 'none', padding: '6px 12px', fontFamily: 'monospace', fontSize: '11px', cursor: 'pointer', borderBottom: activeTab === 'tab2' ? '2px solid #0f0' : '1px solid rgba(0,255,136,0.2)' }}>Tab 2</button>
-      </div>
-      {activeTab === 'tab1' ? (
-        <>
-          <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
-          <div ref={ref} style={{ width: "100vw", height: "calc(100vh - 30px)" }} />
-        </>
-      ) : (
-        <div style={{ width: "100vw", height: "calc(100vh - 30px)", display: "flex", alignItems: "center", justifyContent: "center", color: "#0f0", fontFamily: "monospace", fontSize: "12px" }}>Tab 2 - Placeholder</div>
-      )
+      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
+      <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
         <div
