@@ -149,7 +149,7 @@ export default function AppLattice({ latticeFile }) {
           });
           const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(ox, oy, oz);
-          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3 * 0.7 * crystalSize;
+          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3 * 0.7 * 0.4 * crystalSize;
           mesh.scale.setScalar(baseScale);
           scene.add(mesh);
           meshes[vtc] = mesh;
