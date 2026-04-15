@@ -1,12 +1,13 @@
 import { useState } from "react";
 import App from "./App.jsx";
+import AppLattice from "./AppLattice.jsx";
 
 export default function AppWithTabs() {
   const [activeTab, setActiveTab] = useState('tab1');
 
   if (activeTab === 'tab2') {
     return (
-      <div style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column", background: "#010408" }}>
+      <div style={{ width: "100vw", height: "100vh", display: "flex", flexDirection: "column" }}>
         <div style={{
           display: "flex",
           height: "30px",
@@ -15,6 +16,7 @@ export default function AppWithTabs() {
           paddingLeft: "10px",
           alignItems: "center",
           gap: "2px",
+          zIndex: 1000,
         }}>
           <button onClick={() => setActiveTab('tab1')} style={{
             background: 'transparent',
@@ -37,16 +39,8 @@ export default function AppWithTabs() {
             borderBottom: '2px solid #0f0',
           }}>Tab 2</button>
         </div>
-        <div style={{
-          flex: 1,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#0f0",
-          fontFamily: "monospace",
-          fontSize: "12px",
-        }}>
-          Tab 2 - Placeholder
+        <div style={{ flex: 1, overflow: "hidden" }}>
+          <AppLattice latticeFile="/lattice-openclaw.json" />
         </div>
       </div>
     );
@@ -86,9 +80,7 @@ export default function AppWithTabs() {
         }}>Tab 2</button>
       </div>
       <div style={{ flex: 1, overflow: "hidden" }}>
-        <div style={{ width: "100vw", height: "calc(100vh - 30px)" }}>
-          <App />
-        </div>
+        <App />
       </div>
     </div>
   );
