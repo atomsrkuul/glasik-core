@@ -159,7 +159,9 @@ fn split_deflate(tok_ids: Vec<u8>, literals: Vec<u8>) -> Vec<u8> {
     let lit_comp = if literals.is_empty() {
         vec![]
     } else {
-        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
+        // Use best compression level on literal stream -- larger window, longer matches
+        // Literal stream has within-message repetition that higher deflate levels find
+        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::best());
         let max = comp.deflate_compress_bound(literals.len());
         let mut out = vec![0u8; max];
         match comp.deflate_compress(&literals, &mut out) {

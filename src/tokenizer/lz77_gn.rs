@@ -524,3 +524,142 @@ impl<const PREFIX: usize> GNHybridEncoder<PREFIX> {
 impl<const PREFIX: usize> Default for GNHybridEncoder<PREFIX> {
     fn default() -> Self { Self::new() }
 }
+
+/// Pure LZ77 encoder for literal stream pre-processing
+/// Finds intra-buffer back-references in the literal residue
+/// before deflate -- closes the gap vs brotli on longer messages
+/// Output format: [ESCAPE=0x01][dist_lo][dist_hi][len] for back-refs
+///                [literal_byte] for unmatched bytes
+/// ESCAPE byte in input: [ESCAPE][0x00]
+pub fn lz77_encode_literals(buf: &[u8]) -> Vec<u8> {
+    const LZ_MIN_MATCH: usize = 4;
+    const LZ_MAX_MATCH: usize = 255;
+    const LZ_HASH_SIZE: usize = 1 << 14; // 16384
+    const LZ_HASH_MASK: usize = LZ_HASH_SIZE - 1;
+    const LZ_MAX_DIST: usize = 32768;
+    const LZ_MAX_CHAIN: usize = 32;
+    const LZ_ESCAPE: u8 = 0x01;
+
+    let n = buf.len();
+    if n < LZ_MIN_MATCH { return buf.to_vec(); }
+
+    let mut head = vec![-1i32; LZ_HASH_SIZE];
+    let mut prev = vec![-1i32; n.min(LZ_MAX_DIST)];
+    let mut out = Vec::with_capacity(n);
+    let mut i = 0usize;
+
+    #[inline]
+    fn lz_hash(buf: &[u8], i: usize) -> usize {
+        let v = (buf[i] as usize)
+              | ((buf[i+1] as usize) << 5)
+              | ((buf[i+2] as usize) << 10)
+              | ((buf[i+3] as usize) << 15);
+        v.wrapping_mul(0x9E3779B9) >> (32 - 14) & (LZ_HASH_SIZE - 1)
+    }
+
+    while i < n {
+        // Escape literal escape byte
+        if buf[i] == LZ_ESCAPE {
+            out.push(LZ_ESCAPE);
+            out.push(0x00);
+            if i + 4 <= n {
+                let h = lz_hash(buf, i);
+                let slot = i % LZ_MAX_DIST.min(n);
+                prev[slot] = head[h];
+                head[h] = i as i32;
+            }
+            i += 1;
+            continue;
+        }
+
+        // Try LZ77 back-reference
+        let mut best_len = LZ_MIN_MATCH - 1;
+        let mut best_dist = 0usize;
+
+        if i + LZ_MIN_MATCH <= n {
+            let h = lz_hash(buf, i);
+            let mut p = head[h];
+            let mut depth = 0;
+
+            while p >= 0 && depth < LZ_MAX_CHAIN {
+                let j = p as usize;
+                let dist = i - j;
+                if dist == 0 || dist > LZ_MAX_DIST { break; }
+                let max_len = (n - i).min(LZ_MAX_MATCH);
+                let mut len = 0;
+                while len < max_len && buf[i + len] == buf[j + (len % dist)] {
+                    len += 1;
+                }
+                if len > best_len {
+                    best_len = len;
+                    best_dist = dist;
+                    if best_len >= LZ_MAX_MATCH { break; }
+                }
+                p = prev[j % LZ_MAX_DIST.min(n)];
+                depth += 1;
+            }
+
+            // Insert into hash
+            let slot = i % LZ_MAX_DIST.min(n);
+            prev[slot] = head[h];
+            head[h] = i as i32;
+        }
+
+        if best_dist > 0 && best_len >= LZ_MIN_MATCH {
+            // Emit back-reference: [ESCAPE][dist_lo][dist_hi][len]
+            out.push(LZ_ESCAPE);
+            out.push((best_dist & 0xFF) as u8);
+            out.push((best_dist >> 8) as u8);
+            out.push(best_len as u8);
+            // Insert remaining positions into hash
+            for k in 1..best_len.min(4) {
+                if i + k + 4 <= n {
+                    let hk = lz_hash(buf, i + k);
+                    let slot = (i + k) % LZ_MAX_DIST.min(n);
+                    prev[slot] = head[hk];
+                    head[hk] = (i + k) as i32;
+                }
+            }
+            i += best_len;
+        } else {
+            out.push(buf[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Decode LZ77 literal stream
+pub fn lz77_decode_literals(buf: &[u8]) -> Vec<u8> {
+    const LZ_ESCAPE: u8 = 0x01;
+    let mut out = Vec::with_capacity(buf.len() * 2);
+    let mut i = 0usize;
+
+    while i < buf.len() {
+        if buf[i] == LZ_ESCAPE {
+            if i + 1 < buf.len() && buf[i+1] == 0x00 {
+                out.push(LZ_ESCAPE);
+                i += 2;
+            } else if i + 4 <= buf.len() {
+                let dist = (buf[i+1] as usize) | ((buf[i+2] as usize) << 8);
+                let len = buf[i+3] as usize;
+                let start = out.len().saturating_sub(dist);
+                for k in 0..len {
+                    let src = start + (k % dist.max(1));
+                    if src < out.len() {
+                        let b = out[src];
+                        out.push(b);
+                    }
+                }
+                i += 4;
+            } else {
+                out.push(buf[i]);
+                i += 1;
+            }
+        } else {
+            out.push(buf[i]);
+            i += 1;
+        }
+    }
+    out
+}
