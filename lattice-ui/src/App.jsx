@@ -107,7 +107,7 @@ export default function App() {
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
-  const [crystalSize, setCrystalSize] = useState(1.0);
+  const [crystalSize, setCrystalSize] = useState(1.0); // Slider centered at 1.0, range 0.5-2.0 maps to 0.075-0.3
 
   const playheadRef = useRef(null);
   const meshesRef = useRef({});
@@ -221,7 +221,7 @@ export default function App() {
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
           mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.15);
+          mesh.scale.setScalar((scale * crystalSize * 0.15));
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
