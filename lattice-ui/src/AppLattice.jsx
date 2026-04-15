@@ -149,7 +149,7 @@ export default function AppLattice({ latticeFile }) {
           });
           const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(ox, oy, oz);
-          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3;
+          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3 * 0.7 * crystalSize;
           mesh.scale.setScalar(baseScale);
           scene.add(mesh);
           meshes[vtc] = mesh;
@@ -172,7 +172,7 @@ export default function AppLattice({ latticeFile }) {
     return () => {
       if (ref.current?.children.length) ref.current.innerHTML = "";
     };
-  }, [latticeFile]);
+  }, [latticeFile, crystalSize]);
 
   return (
     <div style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -192,6 +192,37 @@ export default function AppLattice({ latticeFile }) {
           {shardCount} shards
         </div>
       )}
+      <div style={{
+        position: "fixed",
+        bottom: "20px",
+        left: "20px",
+        background: "rgba(0, 0, 0, 0.85)",
+        color: "#0f0",
+        padding: "12px 16px",
+        borderRadius: "6px",
+        fontFamily: "monospace",
+        fontSize: "12px",
+        border: "1px solid rgba(0, 255, 136, 0.5)",
+        zIndex: 1000,
+        pointerEvents: "auto",
+      }}>
+        Size: {(crystalSize * 100).toFixed(0)}%
+        <input
+          type="range"
+          min="0.1"
+          max="2"
+          step="0.05"
+          value={crystalSize}
+          onChange={(e) => setCrystalSize(parseFloat(e.target.value))}
+          style={{
+            display: "block",
+            marginTop: "8px",
+            width: "120px",
+            accentColor: "#0f0",
+            cursor: "pointer",
+          }}
+        />
+      </div>
     </div>
   );
 }
