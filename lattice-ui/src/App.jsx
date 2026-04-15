@@ -81,7 +81,7 @@ export default function App() {
     scene.fog = new THREE.FogExp2(0x010408, 0.003);
 
     const camera = new THREE.PerspectiveCamera(60, W/H, 0.1, 5000);
-    camera.position.set(0, 80, 600);
+    camera.position.set(0, 30, 280);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(W, H);
@@ -95,8 +95,8 @@ export default function App() {
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
-    controls.minDistance = 100;
-    controls.maxDistance = 1200;
+    controls.minDistance = 50;
+    controls.maxDistance = 600;
 
     // bloom
     const composer = new EffectComposer(renderer);
