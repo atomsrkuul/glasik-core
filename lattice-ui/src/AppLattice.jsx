@@ -78,6 +78,7 @@ const TYPE_COLOR = {
 export default function AppLattice({ latticeFile }) {
   const ref = useRef(null);
   const [shardCount, setShardCount] = useState(0);
+  const [crystalSize, setCrystalSize] = useState(1.0);
 
   useEffect(() => {
     if (!ref.current) return;
