@@ -107,12 +107,24 @@ export default function App() {
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
-  const [crystalSize, setCrystalSize] = useState(1.0); // Slider centered at 1.0, range 0.5-2.0 maps to 0.075-0.3
+  const [crystalSize, setCrystalSize] = useState(1.0);
+  const [namespaces, setNamespaces] = useState([]);
+  const [activeNs, setActiveNs] = useState(null);
 
   const playheadRef = useRef(null);
   const meshesRef = useRef({});
   const selectedRef = useRef(null);
   const stepsRef = useRef([]);
+
+  const DASH = typeof window !== 'undefined' && window.location.port === '5173'
+    ? 'http://localhost:8888' : '';
+
+  useEffect(() => {
+    fetch(DASH + '/api/namespaces')
+      .then(r => r.json())
+      .then(ns => { if (ns && ns.length > 0) { setNamespaces(ns); setActiveNs(ns[0].session_id); } })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const W = window.innerWidth;
@@ -171,7 +183,7 @@ export default function App() {
       autoRotate = false;
     });
 
-    fetch("/lattice.json")
+    fetch(DASH + '/api/lattice/' + (activeNs || 'sess-e2e'))
       .then((r) => r.json())
       .then((graph) => {
         const keys = Object.keys(graph);
@@ -221,7 +233,7 @@ export default function App() {
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
           mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 0.15));
+          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.6);
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
@@ -464,7 +476,7 @@ export default function App() {
       window.removeEventListener("resize", onResize);
       ref.current?.removeChild(renderer.domElement);
     };
-  }, [crystalSize]);
+  }, [crystalSize, activeNs]);
 
   const handleSlider = (e) => {
     const v = parseInt(e.target.value);
@@ -475,6 +487,26 @@ export default function App() {
   return (
     <>
       <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
+      {namespaces.length > 0 && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
+          display: "flex", gap: 4, padding: "8px 12px",
+          background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          overflowX: "auto",
+        }}>
+          {namespaces.map(ns => (
+            <button key={ns.session_id} onClick={() => setActiveNs(ns.session_id)} style={{
+              padding: "4px 12px", borderRadius: 4, border: "none", cursor: "pointer",
+              fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap",
+              background: activeNs === ns.session_id ? "#7c3aed" : "rgba(255,255,255,0.07)",
+              color: activeNs === ns.session_id ? "#fff" : "#6b7280",
+            }}>
+              {ns.session_id.slice(0, 20)} ({ns.cnt})
+            </button>
+          ))}
+        </div>
+      )}
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (

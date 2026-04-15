@@ -77,10 +77,32 @@ function buildCrystalGeometry(vtc) {
   return geo;
 }
 
+// Dynamic shard sources from dashboard API
+// Falls back to static files if API unavailable
+const DASHBOARD_API = 'http://localhost:8888';
 const SHARD_SOURCES = [
-  { id: "glasik", label: "Glasik (17)", file: "/lattice-glasik.json" },
-  { id: "gn", label: "GN (71)", file: "/lattice-gn.json" },
+  { id: "sess-e2e", label: "E2E Test", file: DASHBOARD_API+"/api/lattice/sess-e2e" },
+  { id: "sess1", label: "Session 1", file: DASHBOARD_API+"/api/lattice/sess1" },
+  { id: "glasik", label: "Glasik", file: "/lattice-glasik.json" },
+  { id: "gn", label: "GN Static", file: "/lattice-gn.json" },
 ];
+
+// Auto-discover namespaces from dashboard
+async function fetchNamespaces() {
+  try {
+    const r = await fetch(DASHBOARD_API+'/api/namespaces');
+    if (!r.ok) return SHARD_SOURCES;
+    const sessions = await r.json();
+    return sessions.map(s => ({
+      id: s.session_id,
+      label: s.session_id.slice(0,20)+' ('+s.cnt+')',
+      file: DASHBOARD_API+'/api/lattice/'+s.session_id,
+      avgRatio: s.avg_ratio,
+    }));
+  } catch(e) {
+    return SHARD_SOURCES;
+  }
+}
 
 const TYPE_COLOR = {
   user_intent:        0x00ff88,
@@ -127,7 +149,7 @@ function VisualizerCanvas({ dbFile, dbLabel }) {
     // bloom
     const composer = new EffectComposer(renderer);
     composer.addPass(new RenderPass(scene, camera));
-    const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.6, 0.4, 0.85);
+    const bloom = new UnrealBloomPass(new THREE.Vector2(W, H), 0.7, 0.4, 0.82);
     composer.addPass(bloom);
 
     // lights
@@ -173,8 +195,8 @@ function VisualizerCanvas({ dbFile, dbLabel }) {
           });
           const mesh = new THREE.Mesh(geo, mat);
           mesh.position.set(ox, oy, oz);
-          const baseScale = (0.9 + Math.log2(node.count + 1) * 0.6) * 0.3;
-          mesh.scale.setScalar(baseScale);
+          const baseScale = 0.9 + Math.log2(node.count + 1) * 0.6;
+          mesh.scale.setScalar(baseScale * 1.5);
           mesh.userData = { vtc, color, index: idx };
           scene.add(mesh);
           meshes[vtc] = mesh;
@@ -233,8 +255,23 @@ function VisualizerCanvas({ dbFile, dbLabel }) {
 }
 
 export default function AppWithShards() {
-  const [activeTab, setActiveTab] = useState("glasik");
-  const activeDb = SHARD_SOURCES.find(db => db.id === activeTab);
+  const [activeTab, setActiveTab] = useState("sess-e2e");
+  const [sources, setSources] = useState(SHARD_SOURCES);
+  
+  useEffect(() => {
+    fetchNamespaces().then(ns => {
+      if (ns.length > 0) {
+        setSources(ns);
+        setActiveTab(ns[0].id);
+      }
+    });
+    // Refresh every 30s
+    const iv = setInterval(() => {
+      fetchNamespaces().then(ns => { if (ns.length > 0) setSources(ns); });
+    }, 30000);
+    return () => clearInterval(iv);
+  }, []);
+  const activeDb = sources.find(db => db.id === activeTab) || sources[0];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100vw", height: "100vh", background: "#010408" }}>
@@ -248,7 +285,7 @@ export default function AppWithShards() {
         gap: "0px",
         alignItems: "center",
       }}>
-        {SHARD_SOURCES.map(db => (
+        {sources.map(db => (
           <button
             key={db.id}
             onClick={() => setActiveTab(db.id)}
