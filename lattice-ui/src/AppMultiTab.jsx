@@ -78,12 +78,13 @@ function buildCrystalGeometry(vtc) {
 }
 
 const DATABASES = [
-  { id: "glasik", label: "Glasik", file: "/lattice.json" },
-  { id: "claude", label: "Claude", file: "/lattice-claude.json" },
-  { id: "openclaw", label: "OpenClaw", file: "/lattice-openclaw.json" },
+  { id: "glasik", label: "Glasik (17)", file: "/lattice-glasik.json" },
+  { id: "gn", label: "GN (71)", file: "/lattice-gn.json" },
+  { id: "original", label: "Original (25)", file: "/lattice.json" },
 ];
 
 function VisualizerCanvas({ dbFile, dbLabel }) {
+  // Each canvas has its own animator
   const ref = useRef(null);
   const sceneRef = useRef(null);
   const [shardCount, setShardCount] = useState(0);
@@ -167,9 +168,7 @@ function VisualizerCanvas({ dbFile, dbLabel }) {
           meshes[vtc] = mesh;
         });
 
-        let frameCount = 0;
         const animate = () => {
-          frameCount++;
           requestAnimationFrame(animate);
           controls.update();
           
