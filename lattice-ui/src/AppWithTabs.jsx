@@ -4,6 +4,7 @@ import AppLattice from "./AppLattice.jsx";
 
 export default function AppWithTabs() {
   const [activeTab, setActiveTab] = useState('tab1');
+  const [error, setError] = useState(null);
 
   if (activeTab === 'tab2') {
     return (
@@ -39,7 +40,7 @@ export default function AppWithTabs() {
             borderBottom: '2px solid #0f0',
           }}>Tab 2</button>
         </div>
-        <div style={{ flex: 1, overflow: "hidden" }}>
+        <div style={{ flex: 1, overflow: "hidden", background: "#010408" }}>
           <AppLattice latticeFile="/lattice-openclaw.json" />
         </div>
       </div>
