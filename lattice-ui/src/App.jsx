@@ -221,7 +221,7 @@ export default function App() {
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
           mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.3);
+          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.3 * 0.7 * 0.4);
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
