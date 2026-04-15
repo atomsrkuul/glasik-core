@@ -80,11 +80,10 @@ function buildCrystalGeometry(vtc) {
 const DATABASES = [
   { id: "glasik", label: "Glasik (17)", file: "/lattice-glasik.json" },
   { id: "gn", label: "GN (71)", file: "/lattice-gn.json" },
-  { id: "original", label: "Original (25)", file: "/lattice.json" },
+  { id: "openclaw", label: "OpenClaw", file: null },
 ];
 
 function VisualizerCanvas({ dbFile, dbLabel }) {
-  // Each canvas has its own animator
   const ref = useRef(null);
   const sceneRef = useRef(null);
   const [shardCount, setShardCount] = useState(0);
@@ -241,7 +240,7 @@ function VisualizerCanvas({ dbFile, dbLabel }) {
 
 export default function AppMultiTab() {
   const [activeTab, setActiveTab] = useState("glasik");
-  const activeDb = DATABASES.find(db => db.id === activeTab);
+  const activeDb = DATABASES.find(db => db.id === activeTab) || DATABASES[0];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", width: "100vw", height: "100vh", background: "#000" }}>
@@ -288,8 +287,23 @@ export default function AppMultiTab() {
       </div>
 
       {/* Canvas area */}
-      <div style={{ flex: 1, overflow: "hidden" }}>
-        <VisualizerCanvas key={activeTab} dbFile={activeDb.file} dbLabel={activeDb.label} />
+      <div style={{ flex: 1, overflow: "hidden", background: "#000" }}>
+        {activeDb.file ? (
+          <VisualizerCanvas key={activeTab} dbFile={activeDb.file} dbLabel={activeDb.label} />
+        ) : (
+          <div style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#666",
+            fontFamily: "monospace",
+            fontSize: "12px",
+          }}>
+            No data loaded
+          </div>
+        )}
       </div>
     </div>
   );
