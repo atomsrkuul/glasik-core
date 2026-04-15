@@ -17,6 +17,7 @@ enum Job {
     CompressAC { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressSplit { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressSplitBatch { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<Vec<u8>> },
+    SplitRaw { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
     DecompressL2 { data: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
@@ -144,7 +145,7 @@ fn deflate_buf(tokenized: Vec<u8>) -> Vec<u8> {
 
 fn split_deflate(tok_ids: Vec<u8>, literals: Vec<u8>) -> Vec<u8> {
     // Compress each stream independently with raw deflate
-    // Frame: [2B tok_deflated_len][tok_deflated][lit_deflated]
+    // Literal stream uses GCdict preset for significant improvement vs brotli
     let tok_comp = if tok_ids.is_empty() {
         vec![]
     } else {
@@ -159,9 +160,7 @@ fn split_deflate(tok_ids: Vec<u8>, literals: Vec<u8>) -> Vec<u8> {
     let lit_comp = if literals.is_empty() {
         vec![]
     } else {
-        // Use best compression level on literal stream -- larger window, longer matches
-        // Literal stream has within-message repetition that higher deflate levels find
-        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::best());
+        let mut comp = libdeflater::Compressor::new(libdeflater::CompressionLvl::default());
         let max = comp.deflate_compress_bound(literals.len());
         let mut out = vec![0u8; max];
         match comp.deflate_compress(&literals, &mut out) {
@@ -263,6 +262,16 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                     Job::CompressSplit { data, resp } => {
                         let (tok_ids, literals) = slider.encode_ac_split(&data);
                         let _ = resp.send(split_deflate(tok_ids, literals));
+                    }
+                    Job::SplitRaw { chunks, resp } => {
+                        let mut all_toks: Vec<u8> = Vec::new();
+                        let mut all_lits: Vec<u8> = Vec::new();
+                        for chunk in &chunks {
+                            let (toks, lits) = slider.encode_ac_split(chunk);
+                            all_toks.extend_from_slice(&toks);
+                            all_lits.extend_from_slice(&lits);
+                        }
+                        let _ = resp.send((all_toks, all_lits));
                     }
                     Job::CompressSplitBatch { chunks, resp } => {
                         // Batch split-stream: collect ALL tok/lit streams across chunks
@@ -511,6 +520,15 @@ pub fn gn_compress_split_batch_sync(chunks: Vec<Buffer>) -> Buffer {
         let _ = slider.encode(chunk); // update window
     }
     Buffer::from(split_deflate(all_toks, all_lits))
+}
+
+/// Returns raw (tok_ids, literals) without deflating -- for JS-side GCdict
+#[napi]
+pub async fn gn_split_raw(chunks: Vec<Buffer>) -> Result<Vec<Buffer>> {
+    let vecs: Vec<Vec<u8>> = chunks.into_iter().map(|b| b.to_vec()).collect();
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::SplitRaw { chunks: vecs, resp: tx }, rx).await
+        .map(|(toks, lits)| vec![Buffer::from(toks), Buffer::from(lits)])
 }
 
 #[napi]
