@@ -6,3 +6,4 @@ gn-node/*.node
 lattice-ui/node_modules/
 lattice-ui/dist/
 lattice.json
+GLASIK_HANDOFF.md
