@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "GN Compression Middleware",
+  "version": "2.2.0",
+  "description": "Routes Claude API traffic through GN compression. Native messaging.",
+  "permissions": ["nativeMessaging", "storage"],
+  "host_permissions": [
+    "https://claude.ai/*",
+    "http://localhost:8888/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["interceptor.js"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://claude.ai/*"],
+      "js": ["relay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "GN Compression"
+  }
+}

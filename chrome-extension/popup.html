@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 280px; background: #0a0e1a; color: #e0e7ff; font-family: monospace; padding: 16px; margin: 0; }
+  h2 { color: #a78bfa; font-size: 14px; margin: 0 0 12px; }
+  .stat { display: flex; justify-content: space-between; margin: 6px 0; font-size: 12px; }
+  .val { color: #34d399; }
+  .status { padding: 4px 8px; border-radius: 4px; font-size: 11px; display: inline-block; margin-bottom: 12px; }
+  .active { background: rgba(124,58,237,0.3); color: #a78bfa; }
+  .inactive { background: rgba(107,114,128,0.3); color: #6b7280; }
+  a { color: #60a5fa; font-size: 11px; text-decoration: none; display: block; margin-top: 10px; }
+</style>
+</head>
+<body>
+  <h2>🔮 GN Compression</h2>
+  <div id="status" class="status inactive">checking...</div>
+  <div class="stat"><span>Shards stored</span><span class="val" id="shards">-</span></div>
+  <div class="stat"><span>Avg ratio</span><span class="val" id="ratio">-</span></div>
+  <div class="stat"><span>Proxy</span><span class="val">localhost:7777</span></div>
+  <a href="http://localhost:8888" target="_blank">Open Dashboard →</a>
+  <script src="popup.js"></script>
+</body>
+</html>
