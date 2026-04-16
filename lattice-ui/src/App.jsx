@@ -19,7 +19,7 @@ function vtcToCrystal(vtc) {
   for (let i = 0; i < upperCount; i++) {
     const b = bytes[(2 + i) % n];
     const angle = (i / upperCount) * Math.PI * 2 + (b / 255) * 0.8;
-    const radius = 3 + (b % 5);
+    const radius = 3 + (b % 6);
     const y = 1 + (bytes[(3 + i) % n] % 4);
     points.push(new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius));
   }
@@ -29,7 +29,7 @@ function vtcToCrystal(vtc) {
     const b = bytes[(10 + i) % n];
     const angle = (i / lowerCount) * Math.PI * 2 + (b / 255) * 0.6;
     const radius = 4 + (b % 6);
-    const y = -(1 + (bytes[(12 + i) % n] % 3));
+    const y = -(1 + (bytes[(12 + i) % n] % 4));
     points.push(new THREE.Vector3(Math.cos(angle) * radius, y, Math.sin(angle) * radius));
   }
 
@@ -84,26 +84,17 @@ function buildCrystalGeometry(vtc) {
 }
 
 const TYPE_COLOR = {
-  user:               0x00ff88,  // green
-  assistant:          0x7c3aed,  // purple
-  user_intent:        0x00ff88,
-  assistant_response: 0x7c3aed,
-  system_message:     0xff8800,  // orange
-  code_block:         0xffee00,  // yellow
-  tool_call:          0xdd00ff,  // magenta
-  tool_result:        0x00eeff,  // cyan
-  batch:              0x44ff44,  // lime
-  default:            0x4b5563,  // gray
+  user_intent: 0x00ff88,
+  user: 0x00ff88,
+  assistant_response: 0x2288ff,
+  assistant: 0x2288ff,
+  system_message: 0xff8800,
+  system: 0xff8800,
+  code_block: 0xffee00,
+  tool_call: 0xdd00ff,
+  tool_result: 0x00eeff,
+  generic: 0x44aaff,
 };
-
-const TYPE_LEGEND = [
-  { type: 'user',           color: '#00ff88', label: 'User Message' },
-  { type: 'assistant',      color: '#7c3aed', label: 'Assistant Response' },
-  { type: 'code_block',     color: '#ffee00', label: 'Code Block' },
-  { type: 'system_message', color: '#ff8800', label: 'System Message' },
-  { type: 'tool_call',      color: '#dd00ff', label: 'Tool Call' },
-  { type: 'tool_result',    color: '#00eeff', label: 'Tool Result' },
-];
 
 function makeArrow(from, to, color) {
   const dir = new THREE.Vector3().subVectors(to, from).normalize();
@@ -118,26 +109,42 @@ export default function App() {
   const [showMenu, setShowMenu] = useState(true);
   const [enableRotation, setEnableRotation] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
+  const [activeNamespace, setActiveNamespace] = useState('lattice');
+  const [lastUpdated, setLastUpdated] = useState(null);
+  const lastUpdatedRef = useRef(null);
+
+  // Poll for lattice data updates every 30s
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch('/lattice-meta.json?t=' + Date.now());
+        const meta = await r.json();
+        if (lastUpdatedRef.current && meta.updated !== lastUpdatedRef.current) {
+          console.log('[lattice] data updated, refreshing scene');
+          setLastUpdated(meta.updated);
+        }
+        lastUpdatedRef.current = meta.updated;
+      } catch(e) {}
+    };
+    poll();
+    const interval = setInterval(poll, 30000);
+    return () => clearInterval(interval);
+  }, []);
+  const [showEdges, setShowEdges] = useState(true);
+  const [showStreams, setShowStreams] = useState(true);
+  const showEdgesRef = useRef(true);
+  const showStreamsRef = useRef(true);
+  const edgeObjectsRef = useRef([]);
+  const arrowObjectsRef = useRef([]);
+  const particleObjectsRef = useRef([]);
   const [playhead, setPlayhead] = useState(null);
   const [maxStep, setMaxStep] = useState(0);
   const [crystalSize, setCrystalSize] = useState(1.0);
-  const [namespaces, setNamespaces] = useState([]);
-  const [activeNs, setActiveNs] = useState(null);
 
   const playheadRef = useRef(null);
   const meshesRef = useRef({});
   const selectedRef = useRef(null);
   const stepsRef = useRef([]);
-
-  const DASH = typeof window !== 'undefined' && window.location.port === '5173'
-    ? 'http://localhost:8888' : '';
-
-  useEffect(() => {
-    fetch(DASH + '/api/namespaces')
-      .then(r => r.json())
-      .then(ns => { if (ns && ns.length > 0) { setNamespaces(ns); setActiveNs(ns[0].session_id); } })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     const W = window.innerWidth;
@@ -196,7 +203,7 @@ export default function App() {
       autoRotate = false;
     });
 
-    fetch(DASH + '/api/lattice/' + (activeNs || 'sess-e2e'))
+    fetch("/" + activeNamespace + ".json")
       .then((r) => r.json())
       .then((graph) => {
         const keys = Object.keys(graph);
@@ -246,7 +253,7 @@ export default function App() {
 
           const scale = 0.9 + Math.log2(node.count + 1) * 0.6;
           mesh.userData.baseScale = scale;
-          mesh.scale.setScalar((scale * crystalSize * 1.5) * 0.6);
+          mesh.scale.setScalar((scale * crystalSize * 1.0) * 0.6);
 
           mesh.userData = { vtc, step: idx };
           scene.add(mesh);
@@ -314,15 +321,19 @@ export default function App() {
             const line = new THREE.Mesh(tubeGeo, mat);
             line.userData = { from: vtc, to: next, weight, fromIdx, toIdx };
             scene.add(line);
+            line.visible = showEdges;
             edgeMeshes.push(line);
+            edgeObjectsRef.current.push(line);
 
             line.userData.pulse = Math.random() * Math.PI * 2;
 
             const arrow = makeArrow(from, to, color);
             arrow.userData = { fromIdx, toIdx };
+            arrow.visible = showEdges;
+            arrowObjectsRef.current.push(arrow);
             scene.add(arrow);
 
-            const particleCount = Math.min(weight + 1, 4);
+            const particleCount = showStreams ? Math.min(weight + 1, 4) : 0;
             for (let p = 0; p < particleCount; p++) {
               const pGeo = new THREE.SphereGeometry(0.3 + weight * 0.2, 4, 4);
               const pMat = new THREE.MeshBasicMaterial({
@@ -333,6 +344,7 @@ export default function App() {
 
               const pMesh = new THREE.Mesh(pGeo, pMat);
               scene.add(pMesh);
+              particleObjectsRef.current.push({ mesh: pMesh });
 
               particles.push({
                 mesh: pMesh,
@@ -407,7 +419,7 @@ export default function App() {
 
           particles.forEach((p) => {
             const visible = p.fromIdx <= ph && p.toIdx <= ph;
-            p.mesh.visible = visible;
+            p.mesh.visible = visible && showStreamsRef.current;
             if (!visible) return;
 
             p.t = (p.t + p.speed) % 1;
@@ -489,7 +501,20 @@ export default function App() {
       window.removeEventListener("resize", onResize);
       ref.current?.removeChild(renderer.domElement);
     };
-  }, [crystalSize, activeNs]);
+  }, [crystalSize, activeNamespace, lastUpdated]);
+
+  useEffect(() => {
+    showEdgesRef.current = showEdges;
+    edgeObjectsRef.current.forEach(obj => { obj.visible = showEdges; });
+    arrowObjectsRef.current.forEach(obj => { obj.visible = showEdges; });
+  }, [showEdges]);
+
+  useEffect(() => {
+    showStreamsRef.current = showStreams;
+    particleObjectsRef.current.forEach(obj => {
+      if (obj.mesh) obj.mesh.visible = showStreams;
+    });
+  }, [showStreams]);
 
   const handleSlider = (e) => {
     const v = parseInt(e.target.value);
@@ -499,27 +524,12 @@ export default function App() {
 
   return (
     <>
-      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} />
-      {namespaces.length > 0 && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, zIndex: 100,
-          display: "flex", gap: 4, padding: "8px 12px",
-          background: "rgba(0,0,0,0.7)", backdropFilter: "blur(8px)",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
-          overflowX: "auto",
-        }}>
-          {namespaces.map(ns => (
-            <button key={ns.session_id} onClick={() => setActiveNs(ns.session_id)} style={{
-              padding: "4px 12px", borderRadius: 4, border: "none", cursor: "pointer",
-              fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap",
-              background: activeNs === ns.session_id ? "#7c3aed" : "rgba(255,255,255,0.07)",
-              color: activeNs === ns.session_id ? "#fff" : "#6b7280",
-            }}>
-              {ns.session_id.slice(0, 20)} ({ns.cnt})
-            </button>
-          ))}
-        </div>
-      )}
+      <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} showEdges={showEdges} setShowEdges={setShowEdges} showStreams={showStreams} setShowStreams={setShowStreams} />
+      <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",display:"flex",gap:4,zIndex:100,padding:"6px 12px",background:"rgba(0,0,0,0.7)",borderRadius:"0 0 10px 10px"}}>
+        {[{key:"lattice",label:"ALL"},{key:"lattice-gn",label:"GN"},{key:"lattice-openclaw",label:"OPENCLAW"},{key:"lattice-glasik",label:"GLASIK"}].map(ns=>(
+          <button key={ns.key} onClick={()=>setActiveNamespace(ns.key)} style={{background:activeNamespace===ns.key?"rgba(124,58,237,0.8)":"rgba(255,255,255,0.05)",color:activeNamespace===ns.key?"#fff":"#a78bfa",border:"1px solid "+(activeNamespace===ns.key?"#7c3aed":"#333"),borderRadius:6,padding:"4px 14px",cursor:"pointer",fontFamily:"monospace",fontSize:11,letterSpacing:"0.08em"}}>{ns.label}</button>
+        ))}
+      </div>
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
 
       {selected && (
@@ -647,21 +657,37 @@ export default function App() {
           style={{ position: "fixed", top: 20, left: 20, zIndex: 10 }}
         >☰</button>
       )}
-
-      {/* Color Legend */}
-      <div style={{
-        position: "fixed", bottom: 24, right: 24,
-        background: "rgba(0,0,0,0.75)",
+    <div style={{
+        position: "fixed",
+        bottom: 16,
+        right: 16,
+        background: "rgba(0,0,0,0.7)",
         border: "1px solid rgba(255,255,255,0.1)",
-        borderRadius: 8, padding: "10px 14px",
-        fontFamily: "monospace", fontSize: 11,
-        backdropFilter: "blur(8px)", zIndex: 100,
+        borderRadius: 8,
+        padding: "10px 14px",
+        fontFamily: "monospace",
+        fontSize: 11,
+        zIndex: 100,
+        minWidth: 160,
       }}>
-        <div style={{ color: "#6b7280", marginBottom: 6, letterSpacing: "0.1em", textTransform: "uppercase", fontSize: 10 }}>Shard Types</div>
-        {TYPE_LEGEND.map(({ type, color, label }) => (
+        <div style={{ color: "#ffffff55", marginBottom: 8, letterSpacing: "0.1em" }}>SHARD TYPES</div>
+        {[
+          { type: "user", label: "User Intent",        color: "#00ff88" },
+          { type: "assistant", label: "Assistant",     color: "#2288ff" },
+          { type: "code_block", label: "Code Block",   color: "#ffee00" },
+          { type: "system_message", label: "System",   color: "#ff8800" },
+          { type: "tool_call", label: "Tool Call",     color: "#dd00ff" },
+          { type: "tool_result", label: "Tool Result", color: "#00eeff" },
+          { type: "generic", label: "Generic",         color: "#44aaff" },
+        ].map(({ type, label, color }) => (
           <div key={type} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-            <div style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />
-            <span style={{ color: "#d1d5db" }}>{label}</span>
+            <div style={{
+              width: 10, height: 10, borderRadius: "50%",
+              background: color,
+              boxShadow: "0 0 6px " + color,
+              flexShrink: 0,
+            }} />
+            <span style={{ color: "#ffffffaa" }}>{label}</span>
           </div>
         ))}
       </div>
@@ -719,7 +745,7 @@ function buildCrystalFromPairs(pairs) {
   
   geometry.computeBoundingSphere();
   const radius = geometry.boundingSphere.radius || 1;
-  const scale = 4.5 / radius;
+  const scale = 4.0 / radius;
   geometry.scale(scale, scale, scale);
 
   return geometry;
@@ -727,7 +753,7 @@ function buildCrystalFromPairs(pairs) {
 
 
 // --- OPTIONS MENU ---
-function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu }) {
+function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu, showEdges, setShowEdges, showStreams, setShowStreams }) {
   if (!showMenu) return null;
 
   return (
@@ -752,6 +778,20 @@ function OptionsMenu({ enableRotation, setEnableRotation, showMenu, setShowMenu 
         /> Rotation
       </label>
 
+      <label style={{ display: "block", marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={showEdges}
+          onChange={() => setShowEdges(!showEdges)}
+        /> Edges
+      </label>
+      <label style={{ display: "block", marginTop: 6 }}>
+        <input
+          type="checkbox"
+          checked={showStreams}
+          onChange={() => setShowStreams(!showStreams)}
+        /> Data Streams
+      </label>
       <button onClick={() => setShowMenu(false)} style={{ marginTop: 8 }}>
         Close
       </button>

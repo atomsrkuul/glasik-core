@@ -1,71 +1,93 @@
 const fs = require('fs');
 const path = require('path');
-const gn = require(
-  path.resolve(__dirname, '../gn-node/gn-native.linux-x64-gnu.node')
-);
+const Database = require('better-sqlite3');
+const gn = require(path.resolve(__dirname, '../gn-node/gn-native.linux-x64-gnu.node'));
 
-(async () => {
+async function generateLattice(rows, label) {
   const graph = {};
+  const sessionPrev = {};
+  let skipped = 0;
 
-  const conversations = [
-    { type: 'system_message',       text: 'You are a helpful assistant with expertise in network security and compression systems.' },
-    { type: 'user_intent',          text: 'user: how do I implement JWT authentication in Node.js?' },
-    { type: 'assistant_response',   text: 'assistant: JWT authentication requires signing a token with a secret key and verifying it on each request.' },
-    { type: 'user_intent',          text: 'user: what is the best compression algorithm for LLM context data?' },
-    { type: 'assistant_response',   text: 'assistant: domain-adaptive compression like GN outperforms gzip and brotli on LLM conversation streams.' },
-    { type: 'code_block',           text: 'function authenticate(token) { return jwt.verify(token, process.env.SECRET); }' },
-    { type: 'user_intent',          text: 'user: login failed please retry' },
-    { type: 'assistant_response',   text: 'assistant: please check your credentials and try again' },
-    { type: 'user_intent',          text: 'user: login failed please retry' },
-    { type: 'assistant_response',   text: 'assistant: your account may be locked after multiple failed attempts' },
-    { type: 'user_intent',          text: 'user: login success thank you' },
-    { type: 'tool_call',            text: '{"tool":"search","query":"compression benchmark results","params":{"limit":10}}' },
-    { type: 'tool_result',          text: '{"results":[{"ratio":2.5,"method":"GN"},{"ratio":2.1,"method":"gzip"}]}' },
-    { type: 'code_block',           text: 'const compress = async (data) => gnCompressSplitBatch([Buffer.from(data)]);' },
-    { type: 'user_intent',          text: 'user: explain fractal compression to me' },
-    { type: 'assistant_response',   text: 'assistant: fractal compression finds self-similar patterns across multiple scales of the data.' },
-    { type: 'system_message',       text: 'System context updated. Memory shard loaded. Vocabulary tier L1 active for code_block domain.' },
-    { type: 'user_intent',          text: 'user: what is a virtual time crystal?' },
-    { type: 'assistant_response',   text: 'assistant: a virtual time crystal is a deterministic structure whose identity is derived from its compression shape.' },
-    { type: 'code_block',           text: 'fn compress_shard(data: &[u8], shard_type: &str) -> Vec<u8> { fractal.compress(data) }' },
-    { type: 'user_intent',          text: 'user: how does vocabulary promotion work in GN?' },
-    { type: 'assistant_response',   text: 'assistant: L3 patterns promote to L2 at frequency 3, L2 promotes to L1 at frequency 50.' },
-    { type: 'tool_call',            text: '{"tool":"compress","input":"hello world","shard_type":"user_intent"}' },
-    { type: 'tool_result',          text: '{"vtc":"VTC-v1-abc123","ratio":2.47,"pairs":29}' },
-    { type: 'user_intent',          text: 'user: show me the benchmark results for ShareGPT corpus' },
-    { type: 'assistant_response',   text: 'assistant: GN split b=8 achieves 2.49-2.52x on ShareGPT, beating brotli by 2 percent.' },
-  ];
-
-  let prev = null;
-
-  for (const { type, text } of conversations) {
-    const buf = Buffer.from(text);
-    const vtc = await gn.gnCompressFractalWithVtc(buf, type, 'session_main');
-    const raw = await gn.gnGetPairs(buf, type, 'session_main');
-
-    const pairs = [];
-    for (let i = 0; i + 2 < raw.length - 2; i += 3) {
-      pairs.push({ lit: raw[i] | (raw[i+1] << 8), tok: raw[i+2] });
-    }
-
-    if (!graph[vtc]) {
-      graph[vtc] = { next: {}, count: 0, pairs, type };
-    }
-    graph[vtc].count++;
-
-    if (prev) {
-      graph[prev].next[vtc] = (graph[prev].next[vtc] || 0) + 1;
-    }
-    prev = vtc;
+  for (const row of rows) {
+    const stype = row.shard_type || 'generic';
+    const session = row.session_id || 'default';
+    const date = row.created_at ? row.created_at.slice(0, 10) : 'unknown';
+    try {
+      const buf = Buffer.from(row.content);
+      const vtc = await gn.gnCompressFractalWithVtc(buf, stype, session);
+      const raw = await gn.gnGetPairs(buf, stype, session);
+      const pairs = [];
+      for (let i = 0; i + 2 < raw.length - 2; i += 3) {
+        pairs.push({ lit: raw[i] | (raw[i+1] << 8), tok: raw[i+2] });
+      }
+      if (!graph[vtc]) {
+        graph[vtc] = {
+          next: {}, count: 0, pairs,
+          type: stype, session, date,
+          ratio: row.compression_ratio || 1.0,
+        };
+      }
+      graph[vtc].count++;
+      const prev = sessionPrev[session];
+      if (prev && graph[prev]) {
+        graph[prev].next[vtc] = (graph[prev].next[vtc] || 0) + 1;
+      }
+      sessionPrev[session] = vtc;
+    } catch(e) { skipped++; }
   }
 
-  fs.writeFileSync(
-    path.resolve(__dirname, 'public/lattice.json'),
-    JSON.stringify(graph, null, 2)
-  );
+  const nodes = Object.keys(graph).length;
+  const edges = Object.values(graph).reduce((a, v) => a + Object.keys(v.next).length, 0);
+  console.log(label + ': ' + nodes + ' nodes, ' + edges + ' edges, ' + skipped + ' skipped');
+  return graph;
+}
 
-  const nodeCount = Object.keys(graph).length;
-  const edgeCount = Object.values(graph).reduce((a, n) => a + Object.keys(n.next).length, 0);
-  console.log('lattice.json generated:', nodeCount, 'nodes,', edgeCount, 'edges');
+(async () => {
+  const MAIN_DB = '/home/boot/glasik-core/data/gn-shards.db';
+  const OPENCLAW_DB = '/home/boot/.openclaw/workspace/projects/bug-bounty/dashboard/data/gn-shards.db';
 
+  const db = new Database(MAIN_DB, { readonly: true });
+  const cols = db.pragma('table_info(shards)').map(c => c.name);
+  const hasCreated = cols.includes('created_at');
+  const hasRatio = cols.includes('compression_ratio');
+
+  let sel = 'SELECT content, session_id, shard_type';
+  if (hasCreated) sel += ', created_at';
+  if (hasRatio) sel += ', compression_ratio';
+  sel += ' FROM shards WHERE content IS NOT NULL AND length(content) > 20 ORDER BY RANDOM() LIMIT 500';
+
+  const allRows = db.prepare(sel).all();
+
+  // ALL lattice
+  const allGraph = await generateLattice(allRows, 'ALL');
+  fs.writeFileSync(path.resolve(__dirname, 'public/lattice.json'), JSON.stringify(allGraph, null, 2));
+
+  // GN sessions (gn-claude-* prefix)
+  const gnRows = allRows.filter(r => r.session_id && (r.session_id.startsWith('gn-') || r.session_id.startsWith('gn-claude')));
+  const gnGraph = await generateLattice(gnRows, 'GN');
+  fs.writeFileSync(path.resolve(__dirname, 'public/lattice-gn.json'), JSON.stringify(gnGraph, null, 2));
+
+  // GLASIK sessions (claude-session-* prefix)
+  const glasikRows = allRows.filter(r => r.session_id && r.session_id.startsWith('claude-'));
+  const glasikGraph = await generateLattice(glasikRows, 'GLASIK');
+  fs.writeFileSync(path.resolve(__dirname, 'public/lattice-glasik.json'), JSON.stringify(glasikGraph, null, 2));
+
+  db.close();
+
+  // OPENCLAW DB
+  if (fs.existsSync(OPENCLAW_DB)) {
+    const odb = new Database(OPENCLAW_DB, { readonly: true });
+    const ocols = odb.pragma('table_info(shards)').map(c => c.name);
+    let osel = 'SELECT content';
+    if (ocols.includes('session_id')) osel += ', session_id';
+    if (ocols.includes('created_at')) osel += ', created_at';
+    if (ocols.includes('compression_ratio')) osel += ', compression_ratio';
+    osel += ' FROM shards WHERE content IS NOT NULL AND length(content) > 20 LIMIT 150';
+    const orows = odb.prepare(osel).all().map(r => ({ ...r, shard_type: 'generic' }));
+    odb.close();
+    const ocGraph = await generateLattice(orows, 'OPENCLAW');
+    fs.writeFileSync(path.resolve(__dirname, 'public/lattice-openclaw.json'), JSON.stringify(ocGraph, null, 2));
+  }
+
+  console.log('All lattice JSONs generated.');
 })();
