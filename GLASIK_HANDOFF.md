@@ -322,6 +322,23 @@ Lattice UI: cd ~/glasik-core/lattice-ui && node generate-lattice.cjs && npm run 
   Article 6: GCdict -- beats brotli on ALL corpora -- PENDING (write this next)
   Article 7: GCdict on general compression -- PENDING
 ---
+## COMPLETED THIS SESSION (April 16 2026)
+- GN+GCdict verified beating brotli on all 4 corpora
+- gn-auto-compressor.js: self-optimizing engine built and wired
+  - Per-namespace, zero configuration
+  - Checkpoint at msg 50, recheck every 200
+  - Every 10th msg held out for honest validation
+  - Persists to ~/.openclaw/gn-dicts/
+  - Fractal path included in recheck at msg 200+
+  - Verified on real WildChat: +6.3% at checkpoint, activates correctly
+- gn-shards.js wired to auto-compressor
+  - Namespace from sessionId prefix (claude-abc -> claude)
+  - mode field in shard record reflects actual path used
+- Bench scripts saved permanently:
+  ~/glasik-core/bench/gcdict_all_corpora.js
+  ~/glasik-core/bench/gcdict_claude_bench.js
+  /tmp/gcdict_falloff.js (regenerate if lost)
+
 ## PENDING (priority order)
 1. NLNet talking points -- April 29 2026 deadline (#2026-06-023) URGENT
 2. arXiv endorsement -- code 7HWUBA, cs.IR, 3+ cs papers required
