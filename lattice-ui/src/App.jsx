@@ -84,13 +84,26 @@ function buildCrystalGeometry(vtc) {
 }
 
 const TYPE_COLOR = {
-  user_intent: 0x00ff88,
-  assistant_response: 0x2288ff,
-  system_message: 0xff8800,
-  code_block: 0xffee00,
-  tool_call: 0xdd00ff,
-  tool_result: 0x00eeff,
+  user:               0x00ff88,  // green
+  assistant:          0x7c3aed,  // purple
+  user_intent:        0x00ff88,
+  assistant_response: 0x7c3aed,
+  system_message:     0xff8800,  // orange
+  code_block:         0xffee00,  // yellow
+  tool_call:          0xdd00ff,  // magenta
+  tool_result:        0x00eeff,  // cyan
+  batch:              0x44ff44,  // lime
+  default:            0x4b5563,  // gray
 };
+
+const TYPE_LEGEND = [
+  { type: 'user',           color: '#00ff88', label: 'User Message' },
+  { type: 'assistant',      color: '#7c3aed', label: 'Assistant Response' },
+  { type: 'code_block',     color: '#ffee00', label: 'Code Block' },
+  { type: 'system_message', color: '#ff8800', label: 'System Message' },
+  { type: 'tool_call',      color: '#dd00ff', label: 'Tool Call' },
+  { type: 'tool_result',    color: '#00eeff', label: 'Tool Result' },
+];
 
 function makeArrow(from, to, color) {
   const dir = new THREE.Vector3().subVectors(to, from).normalize();
@@ -634,6 +647,24 @@ export default function App() {
           style={{ position: "fixed", top: 20, left: 20, zIndex: 10 }}
         >☰</button>
       )}
+
+      {/* Color Legend */}
+      <div style={{
+        position: "fixed", bottom: 24, right: 24,
+        background: "rgba(0,0,0,0.75)",
+        border: "1px solid rgba(255,255,255,0.1)",
+        borderRadius: 8, padding: "10px 14px",
+        fontFamily: "monospace", fontSize: 11,
+        backdropFilter: "blur(8px)", zIndex: 100,
+      }}>
+        <div style={{ color: "#6b7280", marginBottom: 6, letterSpacing: "0.1em", textTransform: "uppercase", fontSize: 10 }}>Shard Types</div>
+        {TYPE_LEGEND.map(({ type, color, label }) => (
+          <div key={type} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+            <div style={{ width: 10, height: 10, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}` }} />
+            <span style={{ color: "#d1d5db" }}>{label}</span>
+          </div>
+        ))}
+      </div>
     </>
   );
 }
