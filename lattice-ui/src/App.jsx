@@ -109,8 +109,8 @@ export default function App() {
   const [showMenu, setShowMenu] = useState(true);
   const [enableRotation, setEnableRotation] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
-  const [activeNamespace, setActiveNamespace] = useState('lattice');
-  const [tabLabels, setTabLabels] = useState({'lattice':'ALL','lattice-gn':'GN','lattice-openclaw':'OPENCLAW','lattice-glasik':'GLASIK'});
+  const [activeNamespace, setActiveNamespace] = useState('lattice-gn');
+  const [tabLabels, setTabLabels] = useState({'lattice-gn':'GN','lattice-openclaw':'OPENCLAW','lattice-glasik':'GLASIK'});
   const [editingTab, setEditingTab] = useState(null);
   const [editValue, setEditValue] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
