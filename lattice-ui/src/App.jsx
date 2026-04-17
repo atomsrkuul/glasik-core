@@ -110,6 +110,9 @@ export default function App() {
   const [enableRotation, setEnableRotation] = useState(true);
   const [hoveredEdge, setHoveredEdge] = useState(null);
   const [activeNamespace, setActiveNamespace] = useState('lattice');
+  const [tabLabels, setTabLabels] = useState({'lattice':'ALL','lattice-gn':'GN','lattice-openclaw':'OPENCLAW','lattice-glasik':'GLASIK'});
+  const [editingTab, setEditingTab] = useState(null);
+  const [editValue, setEditValue] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
   const lastUpdatedRef = useRef(null);
 
@@ -526,8 +529,55 @@ export default function App() {
     <>
       <OptionsMenu enableRotation={enableRotation} setEnableRotation={setEnableRotation} showMenu={showMenu} setShowMenu={setShowMenu} showEdges={showEdges} setShowEdges={setShowEdges} showStreams={showStreams} setShowStreams={setShowStreams} />
       <div style={{position:"fixed",top:0,left:"50%",transform:"translateX(-50%)",display:"flex",gap:4,zIndex:100,padding:"6px 12px",background:"rgba(0,0,0,0.7)",borderRadius:"0 0 10px 10px"}}>
-        {[{key:"lattice",label:"ALL"},{key:"lattice-gn",label:"GN"},{key:"lattice-openclaw",label:"OPENCLAW"},{key:"lattice-glasik",label:"GLASIK"}].map(ns=>(
-          <button key={ns.key} onClick={()=>setActiveNamespace(ns.key)} style={{background:activeNamespace===ns.key?"rgba(124,58,237,0.8)":"rgba(255,255,255,0.05)",color:activeNamespace===ns.key?"#fff":"#a78bfa",border:"1px solid "+(activeNamespace===ns.key?"#7c3aed":"#333"),borderRadius:6,padding:"4px 14px",cursor:"pointer",fontFamily:"monospace",fontSize:11,letterSpacing:"0.08em"}}>{ns.label}</button>
+        {Object.entries(tabLabels).map(([key, label]) => (
+          <div key={key} style={{display:"flex",alignItems:"center",gap:2}}>
+            {editingTab === key ? (
+              <input
+                autoFocus
+                value={editValue}
+                onChange={e => setEditValue(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    setTabLabels(prev => ({...prev, [key]: editValue || label}));
+                    setEditingTab(null);
+                  }
+                  if (e.key === 'Escape') setEditingTab(null);
+                }}
+                onBlur={() => {
+                  setTabLabels(prev => ({...prev, [key]: editValue || label}));
+                  setEditingTab(null);
+                }}
+                style={{
+                  background:"rgba(124,58,237,0.3)",
+                  border:"1px solid #7c3aed",
+                  borderRadius:4,
+                  color:"#fff",
+                  fontFamily:"monospace",
+                  fontSize:11,
+                  padding:"3px 8px",
+                  width: Math.max(60, editValue.length * 8) + "px",
+                  outline:"none",
+                }}
+              />
+            ) : (
+              <button
+                onClick={() => setActiveNamespace(key)}
+                onDoubleClick={() => { setEditingTab(key); setEditValue(label); }}
+                title="Double-click to rename"
+                style={{
+                  background: activeNamespace===key ? "rgba(124,58,237,0.8)" : "rgba(255,255,255,0.05)",
+                  color: activeNamespace===key ? "#fff" : "#a78bfa",
+                  border: "1px solid " + (activeNamespace===key ? "#7c3aed" : "#333"),
+                  borderRadius:6,
+                  padding:"4px 14px",
+                  cursor:"pointer",
+                  fontFamily:"monospace",
+                  fontSize:11,
+                  letterSpacing:"0.08em",
+                }}
+              >{label}</button>
+            )}
+          </div>
         ))}
       </div>
       <div ref={ref} style={{ width: "100vw", height: "100vh" }} />
