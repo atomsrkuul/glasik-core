@@ -7,3 +7,9 @@ lattice-ui/node_modules/
 lattice-ui/dist/
 lattice.json
 GLASIK_HANDOFF.md
+lattice-ui/
+chrome-extension/
+data/
+bench/
+benches/
+GLASIK_HANDOFF.md
