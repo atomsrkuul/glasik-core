@@ -1,0 +1,7 @@
+method	ratio	mb_s	ms_chunk	notes
+gzip-1	2.0914	57.0	0.020	baseline fast
+gzip-6	2.1755	41.9	0.028	baseline quality
+brotli-1	2.0155	75.8	0.015	fastest
+brotli-6	2.4510	25.3	0.046	quality baseline
+GN_AC	2.3333	27.8	0.042	domain-adaptive beats gzip ratio at brotli speed
+GN_L2	2.4455	0.5	2.386	max ratio reference
