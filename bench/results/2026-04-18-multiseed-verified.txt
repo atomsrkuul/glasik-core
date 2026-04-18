@@ -232,3 +232,237 @@ GN split:   17.8 MB/s
 brotli:     18.0 MB/s
 
 ============================================================
+============================================================
+GN BENCHMARK v2 -- Multi-seed with latency + throughput
+============================================================
+
+=== WildChat (seed=1337) ===
+Total turns: 1000  avg size: 1210B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.323x   vs brotli: -2.9%
+GN+GCdict:   2.580x   vs brotli: 7.9%  <-- HEADLINE
+brotli-6:    2.392x
+GCdict gain: +11.1%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.54ms  p90=1.04ms  p99=1.55ms
+brotli:     p50=0.59ms  p90=1.02ms  p99=1.35ms
+--- THROUGHPUT ---
+GN split:   15.4 MB/s
+brotli:     15.9 MB/s
+
+=== ShareGPT (seed=1337) ===
+Total turns: 600  avg size: 1231B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.507x   vs brotli: 3.5%
+GN+GCdict:   2.654x   vs brotli: 9.6%  <-- HEADLINE
+brotli-6:    2.422x
+GCdict gain: +5.8%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.56ms  p90=0.87ms  p99=1.00ms
+brotli:     p50=0.68ms  p90=1.37ms  p99=1.71ms
+--- THROUGHPUT ---
+GN split:   15.4 MB/s
+brotli:     11.4 MB/s
+
+=== LMSYS (seed=1337) ===
+Total turns: 600  avg size: 945B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.337x   vs brotli: 3.7%
+GN+GCdict:   2.482x   vs brotli: 10.1%  <-- HEADLINE
+brotli-6:    2.254x
+GCdict gain: +6.2%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.52ms  p90=0.68ms  p99=0.84ms
+brotli:     p50=0.46ms  p90=0.86ms  p99=1.44ms
+--- THROUGHPUT ---
+GN split:   13.2 MB/s
+brotli:     12.0 MB/s
+
+=== Ubuntu-IRC (seed=1337) ===
+Total turns: 1000  avg size: 42B
+GCdict trained: 14948B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    1.566x   vs brotli: 48.5%
+GN+GCdict:   1.898x   vs brotli: 79.9%  <-- HEADLINE
+brotli-6:    1.055x
+GCdict gain: +21.2%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.08ms  p90=0.12ms  p99=0.14ms
+brotli:     p50=0.15ms  p90=0.30ms  p99=0.33ms
+--- THROUGHPUT ---
+GN split:   3.9 MB/s
+brotli:     1.7 MB/s
+
+=== Claude (seed=1337) ===
+Total turns: 800  avg size: 1082B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.543x   vs brotli: 12.9%
+GN+GCdict:   2.905x   vs brotli: 29.0%  <-- HEADLINE
+brotli-6:    2.252x
+GCdict gain: +14.2%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.48ms  p90=0.74ms  p99=2.06ms
+brotli:     p50=0.52ms  p90=0.82ms  p99=0.90ms
+--- THROUGHPUT ---
+GN split:   15.5 MB/s
+brotli:     15.6 MB/s
+
+============================================================
+
+=== WildChat (seed=2718) ===
+Total turns: 1000  avg size: 1210B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.289x   vs brotli: -3.0%
+GN+GCdict:   2.431x   vs brotli: 3.0%  <-- HEADLINE
+brotli-6:    2.360x
+GCdict gain: +6.2%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.50ms  p90=0.72ms  p99=0.88ms
+brotli:     p50=0.47ms  p90=0.63ms  p99=0.95ms
+--- THROUGHPUT ---
+GN split:   18.0 MB/s
+brotli:     18.2 MB/s
+
+=== ShareGPT (seed=2718) ===
+Total turns: 600  avg size: 1231B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.504x   vs brotli: 2.2%
+GN+GCdict:   2.666x   vs brotli: 8.8%  <-- HEADLINE
+brotli-6:    2.451x
+GCdict gain: +6.5%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.49ms  p90=0.64ms  p99=0.88ms
+brotli:     p50=0.50ms  p90=0.69ms  p99=1.00ms
+--- THROUGHPUT ---
+GN split:   17.9 MB/s
+brotli:     17.3 MB/s
+
+=== LMSYS (seed=2718) ===
+Total turns: 600  avg size: 945B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.297x   vs brotli: 2.2%
+GN+GCdict:   2.437x   vs brotli: 8.5%  <-- HEADLINE
+brotli-6:    2.247x
+GCdict gain: +6.1%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.43ms  p90=0.57ms  p99=0.59ms
+brotli:     p50=0.41ms  p90=0.46ms  p99=0.55ms
+--- THROUGHPUT ---
+GN split:   16.5 MB/s
+brotli:     17.9 MB/s
+
+=== Ubuntu-IRC (seed=2718) ===
+Total turns: 1000  avg size: 42B
+GCdict trained: 15450B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    1.555x   vs brotli: 48.6%
+GN+GCdict:   1.921x   vs brotli: 83.6%  <-- HEADLINE
+brotli-6:    1.046x
+GCdict gain: +23.6%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.06ms  p90=0.07ms  p99=0.16ms
+brotli:     p50=0.12ms  p90=0.14ms  p99=0.20ms
+--- THROUGHPUT ---
+GN split:   5.0 MB/s
+brotli:     2.6 MB/s
+
+=== Claude (seed=2718) ===
+Total turns: 800  avg size: 1082B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.554x   vs brotli: 11.2%
+GN+GCdict:   2.903x   vs brotli: 26.4%  <-- HEADLINE
+brotli-6:    2.297x
+GCdict gain: +13.7%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.51ms  p90=0.73ms  p99=0.93ms
+brotli:     p50=0.52ms  p90=0.72ms  p99=0.79ms
+--- THROUGHPUT ---
+GN split:   17.1 MB/s
+brotli:     16.7 MB/s
+
+============================================================
+
+=== WildChat (seed=31415) ===
+Total turns: 1000  avg size: 1210B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.349x   vs brotli: -3.6%
+GN+GCdict:   2.767x   vs brotli: 13.5%  <-- HEADLINE
+brotli-6:    2.438x
+GCdict gain: +17.8%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.52ms  p90=0.86ms  p99=1.01ms
+brotli:     p50=0.48ms  p90=0.64ms  p99=1.08ms
+--- THROUGHPUT ---
+GN split:   17.0 MB/s
+brotli:     19.8 MB/s
+
+=== ShareGPT (seed=31415) ===
+Total turns: 600  avg size: 1231B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.509x   vs brotli: 2.6%
+GN+GCdict:   2.655x   vs brotli: 8.6%  <-- HEADLINE
+brotli-6:    2.446x
+GCdict gain: +5.8%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.49ms  p90=0.70ms  p99=0.78ms
+brotli:     p50=0.50ms  p90=0.61ms  p99=0.67ms
+--- THROUGHPUT ---
+GN split:   18.0 MB/s
+brotli:     18.8 MB/s
+
+=== LMSYS (seed=31415) ===
+Total turns: 600  avg size: 945B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.392x   vs brotli: 2.7%
+GN+GCdict:   2.487x   vs brotli: 6.7%  <-- HEADLINE
+brotli-6:    2.330x
+GCdict gain: +4.0%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.53ms  p90=0.69ms  p99=1.43ms
+brotli:     p50=0.43ms  p90=0.69ms  p99=4.07ms
+--- THROUGHPUT ---
+GN split:   13.6 MB/s
+brotli:     12.7 MB/s
+
+=== Ubuntu-IRC (seed=31415) ===
+Total turns: 1000  avg size: 42B
+GCdict trained: 15286B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    1.539x   vs brotli: 45.7%
+GN+GCdict:   1.920x   vs brotli: 81.8%  <-- HEADLINE
+brotli-6:    1.056x
+GCdict gain: +24.8%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.08ms  p90=0.11ms  p99=0.12ms
+brotli:     p50=0.18ms  p90=0.24ms  p99=0.26ms
+--- THROUGHPUT ---
+GN split:   3.8 MB/s
+brotli:     1.9 MB/s
+
+=== Claude (seed=31415) ===
+Total turns: 800  avg size: 1082B
+GCdict trained: 32768B from 400 msgs
+--- COMPRESSION RATIO ---
+GN split:    2.460x   vs brotli: 11.9%
+GN+GCdict:   2.876x   vs brotli: 30.8%  <-- HEADLINE
+brotli-6:    2.199x
+GCdict gain: +16.9%
+--- LATENCY (per batch of 8) ---
+GN split:   p50=0.43ms  p90=0.76ms  p99=1.32ms
+brotli:     p50=0.42ms  p90=0.59ms  p99=3.76ms
+--- THROUGHPUT ---
+GN split:   16.0 MB/s
+brotli:     14.9 MB/s
+
+============================================================

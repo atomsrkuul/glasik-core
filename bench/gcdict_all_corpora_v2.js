@@ -128,7 +128,7 @@ async function bench(label, allTurns, seed) {
   console.log('brotli:     ' + mbps(origTotal, brTotalMs) + ' MB/s');
 }
 
-const SEEDS = [42, 137, 999];
+const SEEDS = [1337, 2718, 31415];
 
 (async () => {
   const wild  = await loadJSONL('/tmp/wildchat_turns.jsonl', 1000);
