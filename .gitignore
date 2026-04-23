@@ -10,6 +10,8 @@ GLASIK_HANDOFF.md
 lattice-ui/
 chrome-extension/
 data/
-bench/
+bench/corpora/
+bench/js-harness/node_modules/
+bench/results/*.jsonl
 benches/
 GLASIK_HANDOFF.md

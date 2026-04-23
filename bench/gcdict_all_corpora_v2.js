@@ -35,11 +35,9 @@ async function loadJSONL(path, max) {
 function loadClaude() {
   const turns = [];
   try {
-    const db = new Database('/home/boot/GN/shards/claude/gn-shards.db', { readonly: true });
-    const rows = db.prepare('SELECT content FROM shards WHERE compression_ratio > 0 AND length(content) > 100 ORDER BY RANDOM() LIMIT 800').all();
-    db.close();
-    rows.forEach(r => turns.push({ content: r.content }));
-  } catch(e) { console.log('Claude DB error: ' + e.message); }
+    const lines = require('fs').readFileSync('/tmp/claude_turns.jsonl', 'utf8').trim().split('\n');
+    lines.forEach(l => { try { turns.push(JSON.parse(l)); } catch(e) {} });
+  } catch(e) { console.log('Claude JSONL error: ' + e.message); }
   return turns;
 }
 
