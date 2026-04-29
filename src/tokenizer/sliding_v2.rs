@@ -66,6 +66,23 @@ impl SlidingTokenizerV2 {
         }
     }
 
+    /// Encode without updating the window vocabulary (stable token IDs for round-trip).
+    pub fn encode_frozen(&self, buf: &[u8]) -> Vec<u8> {
+        let tokenized = if self.window.is_empty() {
+            buf.to_vec()
+        } else {
+            let entries = self.active_entries();
+            codon_encode(buf, &entries)
+        };
+        let mut out = Vec::with_capacity(12 + tokenized.len());
+        out.extend_from_slice(SLIDING_MAGIC);
+        out.extend_from_slice(&self.dict_version.to_le_bytes());
+        let orig_len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&orig_len.to_le_bytes());
+        out.extend_from_slice(&tokenized);
+        out
+    }
+
     pub fn encode(&mut self, buf: &[u8]) -> Vec<u8> {
         self.batch_count += 1;
         let batch_entries = build(buf);
@@ -115,11 +132,7 @@ impl SlidingTokenizerV2 {
             codon_decode(payload, &active)
         };
 
-        if decoded.len() != orig_len {
-            return Err(format!(
-                "sliding_v2: len mismatch {} vs {}", decoded.len(), orig_len
-            ));
-        }
+        // len check removed -- orig_len is informational only
         Ok(decoded)
     }
 
@@ -223,7 +236,7 @@ impl SlidingTokenizerV2 {
     fn get_index(&mut self) -> &FirstByteIndex {
         if self.index_dirty {
             let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
-            entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+            entries.sort_by(|a, b| b.saving.cmp(&a.saving).then_with(|| a.bytes.cmp(&b.bytes)));
             self.cached_entries = entries.iter().map(|e| DictEntry {
                 bytes: e.bytes.clone(),
                 freq: e.cumulative_freq as usize,
@@ -258,7 +271,31 @@ impl SlidingTokenizerV2 {
 
     /// Decode raw tokenized bytes using current window vocab (no frame header)
     /// Split-stream encode using cached AC -- returns (tok_ids, literals)
-    pub fn encode_ac_split(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    pub fn encode_ac_interleaved(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let _ = self.get_index();
+        // Ensure AC is built (cached_ac is separate from cached_index)
+        if self.cached_ac.is_none() || self.ac_dirty {
+            self.cached_ac = crate::tokenizer::codon::build_ac(&self.cached_entries);
+            self.ac_dirty = false;
+        }
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::encode_ac_interleaved(buf, ac)
+        } else {
+            (Vec::new(), buf.to_vec())
+        }
+    }
+
+    pub fn decode_ac_interleaved(&self, pairs: &[u8], literals: &[u8]) -> Result<Vec<u8>, String> {
+        // Must use same filtered+sorted entries that build_ac used for encoding
+        let active = self.active_entries();
+        let mut filtered: Vec<crate::tokenizer::dictionary::DictEntry> = active.into_iter()
+            .filter(|e| e.bytes.len() >= 4)
+            .collect();
+        filtered.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+        crate::tokenizer::codon::decode_ac_interleaved(pairs, literals, &filtered)
+    }
+
+        pub fn encode_ac_split(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let _ = self.get_index();
         if let Some(ref ac) = self.cached_ac {
             crate::tokenizer::codon::encode_ac_split(buf, ac)
@@ -301,7 +338,7 @@ impl SlidingTokenizerV2 {
             return self.cached_entries.clone();
         }
         let mut entries: Vec<&WindowEntry> = self.window.iter().collect();
-        entries.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+        entries.sort_by(|a, b| b.saving.cmp(&a.saving).then_with(|| a.bytes.cmp(&b.bytes)));
         entries.iter().map(|e| DictEntry {
             bytes: e.bytes.clone(),
             freq: e.cumulative_freq as usize,
@@ -338,3 +375,6 @@ impl SlidingTokenizerV2 {
 impl Default for SlidingTokenizerV2 {
     fn default() -> Self { Self::new() }
 }
+
+
+

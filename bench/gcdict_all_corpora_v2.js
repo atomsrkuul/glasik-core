@@ -128,6 +128,23 @@ async function bench(label, allTurns, seed) {
 
 const SEEDS = [1337, 2718, 31415];
 
+async function verifyRoundTrip(turns, label) {
+  const { gnCompress, gnDecompress } = require('../gn-node/index.js');
+  let pass = 0, fail = 0;
+  const sample = turns.slice(0, 50);
+  for (const t of sample) {
+    const orig = Buffer.from(t.content || t.text || '');
+    if (!orig.length) continue;
+    try {
+      const comp = await gnCompress(orig);
+      const restored = await gnDecompress(comp);
+      if (orig.equals(restored)) pass++;
+      else fail++;
+    } catch(e) { fail++; }
+  }
+  console.log(`  Round-trip [${label}]: ${pass}/50 pass, ${fail} fail`);
+}
+
 (async () => {
   const wild  = await loadJSONL('/tmp/wildchat_turns.jsonl', 1000);
   const share = await loadJSONL('/tmp/sharegpt_turns.jsonl', 1000);
@@ -141,10 +158,17 @@ const SEEDS = [1337, 2718, 31415];
 
   for (const seed of SEEDS) {
     await bench('WildChat',   wild,   seed);
+    await verifyRoundTrip(wild,   'WildChat');
     await bench('ShareGPT',   share,  seed);
+    await verifyRoundTrip(share,  'ShareGPT');
     await bench('LMSYS',      lmsys,  seed);
+    await verifyRoundTrip(lmsys,  'LMSYS');
     await bench('Ubuntu-IRC', irc,    seed);
-    if (claude.length > 100) await bench('Claude',  claude, seed);
+    await verifyRoundTrip(irc,    'Ubuntu-IRC');
+    if (claude.length > 100) {
+      await bench('Claude', claude, seed);
+      await verifyRoundTrip(claude, 'Claude');
+    }
     console.log('\n' + '='.repeat(60));
   }
 })();

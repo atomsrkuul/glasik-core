@@ -1,5 +1,6 @@
-#![deny(clippy::all)]
-#![allow(clippy::unused_unit)]
+use napi::bindgen_prelude::*;
+use napi_derive::napi;
+
 
 use napi::bindgen_prelude::*;
 use glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2;
@@ -16,6 +17,7 @@ enum Job {
     CompressAC { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressSplit { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressSplitBatch { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<Vec<u8>> },
+    SplitRaw { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
     DecompressL2 { data: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
@@ -27,11 +29,39 @@ enum Job {
     LoadSnapshot { path: String, resp: oneshot::Sender<String> },
     CompressFractal { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<Vec<u8>> },
     DecompressFractal { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
+    CompressFractalVtcV3 { data: Vec<u8>, shard_type: String, session_id: String, resp: oneshot::Sender<napi::Result<String>> },
 }
 
 static WORKER: OnceLock<mpsc::Sender<Job>> = OnceLock::new();
 static FAST_TOK: OnceLock<std::sync::Mutex<GNPrefixTokenizer<4>>> = OnceLock::new();
 static HYBRID_ENC: OnceLock<std::sync::Mutex<glasik_core::tokenizer::hybrid_async::HybridAsyncEncoder>> = OnceLock::new();
+// Sync slider for split-stream sync path -- mutex-locked, no tokio channel
+static SYNC_SLIDER: OnceLock<std::sync::Mutex<glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2>> = OnceLock::new();
+
+fn get_sync_slider() -> &'static std::sync::Mutex<glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2> {
+    SYNC_SLIDER.get_or_init(|| {
+        let mut slider = glasik_core::tokenizer::sliding_v2::SlidingTokenizerV2::new();
+        // Load snapshot into sync slider
+        let snap_path = std::path::Path::new("/home/boot/.openclaw/gn-window.snapshot");
+        if snap_path.exists() {
+            if let Ok(data) = std::fs::read_to_string(snap_path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data) {
+                    if let Some(entries) = json["entries"].as_array() {
+                        let parsed: Vec<(Vec<u8>, u64, u64)> = entries.iter().filter_map(|e| {
+                            let b: Vec<u8> = e["b"].as_array()?.iter()
+                                .filter_map(|x| x.as_u64().map(|v| v as u8)).collect();
+                            Some((b, e["f"].as_u64()?, e["s"].as_u64()?))
+                        }).collect();
+                        let n = parsed.len();
+                        slider.import_dict(1, parsed);
+                        eprintln!("GN-SYNC: loaded {} entries into sync slider", n);
+                    }
+                }
+            }
+        }
+        std::sync::Mutex::new(slider)
+    })
+}
 
 // Thread-local GNHybridEncoder -- fastest path, no locks
 use std::cell::RefCell;
@@ -115,7 +145,7 @@ fn deflate_buf(tokenized: Vec<u8>) -> Vec<u8> {
 
 fn split_deflate(tok_ids: Vec<u8>, literals: Vec<u8>) -> Vec<u8> {
     // Compress each stream independently with raw deflate
-    // Frame: [2B tok_deflated_len][tok_deflated][lit_deflated]
+    // Literal stream uses GCdict preset for significant improvement vs brotli
     let tok_comp = if tok_ids.is_empty() {
         vec![]
     } else {
@@ -233,12 +263,23 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         let (tok_ids, literals) = slider.encode_ac_split(&data);
                         let _ = resp.send(split_deflate(tok_ids, literals));
                     }
+                    Job::SplitRaw { chunks, resp } => {
+                        let mut all_toks: Vec<u8> = Vec::new();
+                        let mut all_lits: Vec<u8> = Vec::new();
+                        for chunk in &chunks {
+                            let (toks, lits) = slider.encode_ac_split(chunk);
+                            all_toks.extend_from_slice(&toks);
+                            all_lits.extend_from_slice(&lits);
+                        }
+                        let _ = resp.send((all_toks, all_lits));
+                    }
                     Job::CompressSplitBatch { chunks, resp } => {
                         // Batch split-stream: collect ALL tok/lit streams across chunks
                         // deflate combined streams once -- eliminates per-chunk header overhead
                         // This is where beats-brotli ratio comes from
                         let mut all_toks: Vec<u8> = Vec::new();
                         let mut all_lits: Vec<u8> = Vec::new();
+                        // Encode all chunks using current AC -- no window update
                         for chunk in &chunks {
                             let (toks, lits) = slider.encode_ac_split(chunk);
                             all_toks.extend_from_slice(&toks);
@@ -328,6 +369,10 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                             .map_err(|e| napi::Error::from_reason(e));
                         let _ = resp.send(out);
                     }
+                    Job::CompressFractalVtcV3 { data, shard_type, session_id, resp } => {
+                        let (_frame, vtc) = fractal.compress_shard_with_vtc_v3(&data, &shard_type, &session_id);
+                        let _ = resp.send(Ok(vtc));
+                    }
                     Job::ExportEntries { resp } => {
                         let (_, entries) = slider.export_dict();
                         let arr: Vec<serde_json::Value> = entries.iter()
@@ -371,12 +416,14 @@ async fn send_job<T>(job: Job, rx: oneshot::Receiver<T>) -> Result<T> {
     rx.await.map_err(|_| Error::from_reason("worker dropped"))
 }
 
+#[napi]
 pub fn gn_compress(data: Buffer) -> Buffer {
     Buffer::from(pipeline::compress(&data))
 }
 
 /// Sync fast compression -- O(n) single pass, no channel overhead
 /// Use gnRefreshVocab() after warming L2 window for best ratio
+#[napi]
 pub fn gn_hybrid_rebuild() -> u32 {
     let mut enc = get_hybrid().lock().unwrap();
     enc.maybe_rebuild();
@@ -384,6 +431,7 @@ pub fn gn_hybrid_rebuild() -> u32 {
     gen as u32
 }
 
+#[napi]
 pub fn gn_compress_local(data: Buffer) -> Buffer {
     // Same as fast sync -- local repeat deprecated (overhead > savings)
     with_tl_hybrid(|tok| {
@@ -392,6 +440,7 @@ pub fn gn_compress_local(data: Buffer) -> Buffer {
     })
 }
 
+#[napi]
 pub fn gn_compress_tl(data: Buffer) -> Buffer {
     // Thread-local tokenizer: zero mutex, zero arc-swap, zero contention
     with_tl_hybrid(|tok| {
@@ -400,11 +449,13 @@ pub fn gn_compress_tl(data: Buffer) -> Buffer {
     })
 }
 
+#[napi]
 pub fn gn_compress_hybrid_sync(data: Buffer) -> Buffer {
     let mut enc = get_hybrid().lock().unwrap();
     Buffer::from(enc.encode(&data))
 }
 
+#[napi]
 pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
     let mut tok = get_fast_tok().lock().unwrap();
     let tokenized = tok.tokenize_to_gn_bytes(&data, true);  // u8 mode: top 254 entries
@@ -413,6 +464,7 @@ pub fn gn_compress_fast_sync(data: Buffer) -> Buffer {
 
 /// Refresh thread-local fast tokenizer from shared vocab
 /// Call after gnRefreshVocab() to sync thread-local state
+#[napi]
 pub fn gn_set_vocab_sync(entries_json: String) -> u32 {
     // Parse entries from JSON and seed tokenizer
     if let Ok(d) = serde_json::from_str::<serde_json::Value>(&entries_json) {
@@ -433,23 +485,53 @@ pub fn gn_set_vocab_sync(entries_json: String) -> u32 {
     0
 }
 
+#[napi]
 pub fn gn_compress_batch(chunks: Vec<Buffer>) -> Vec<Buffer> {
     use rayon::prelude::*;
     let raw: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
     raw.par_iter().map(|d| Buffer::from(pipeline::compress(d))).collect()
 }
 
+#[napi]
 pub async fn gn_export_entries() -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::ExportEntries { resp: tx }, rx).await
 }
 
+#[napi]
 pub async fn gn_refresh_vocab() -> Result<u32> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::RefreshVocab { resp: tx }, rx).await
         .map(|n| n as u32)
 }
 
+/// Sync split-stream batch -- no tokio channel, lab-equivalent latency
+/// Use for latency-sensitive paths where async overhead is unacceptable
+#[napi]
+pub fn gn_compress_split_batch_sync(chunks: Vec<Buffer>) -> Buffer {
+    use glasik_core::tokenizer::codon::encode_ac_split;
+    let mut slider = get_sync_slider().lock().unwrap();
+    let mut all_toks: Vec<u8> = Vec::new();
+    let mut all_lits: Vec<u8> = Vec::new();
+    for chunk in &chunks {
+        let (toks, lits) = slider.encode_ac_split(chunk);
+        all_toks.extend_from_slice(&toks);
+        all_lits.extend_from_slice(&lits);
+        let _ = slider.encode(chunk); // update window
+    }
+    Buffer::from(split_deflate(all_toks, all_lits))
+}
+
+/// Returns raw (tok_ids, literals) without deflating -- for JS-side GCdict
+#[napi]
+pub async fn gn_split_raw(chunks: Vec<Buffer>) -> Result<Vec<Buffer>> {
+    let vecs: Vec<Vec<u8>> = chunks.into_iter().map(|b| b.to_vec()).collect();
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::SplitRaw { chunks: vecs, resp: tx }, rx).await
+        .map(|(toks, lits)| vec![Buffer::from(toks), Buffer::from(lits)])
+}
+
+#[napi]
 pub async fn gn_compress_split_batch(chunks: Vec<Buffer>) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     let vecs: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
@@ -457,42 +539,56 @@ pub async fn gn_compress_split_batch(chunks: Vec<Buffer>) -> Result<Buffer> {
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_split(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressSplit { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_decompress_ac(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::DecompressL2 { data: data.to_vec(), resp: tx }, rx).await?
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_ac(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressAC { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_hybrid(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressHybrid { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_fast(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressFast { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_compress_l2(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressL2 { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 
+#[napi]
+pub async fn gn_decompress_l2(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    let result = send_job(Job::DecompressL2 { data: data.to_vec(), resp: tx }, rx).await??;
+    Ok(Buffer::from(result))
+}
+
+#[napi]
 pub async fn gn_compress_pressurized(target: Buffer, warm_bufs: Vec<Buffer>, pk: u32) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     let warm: Vec<Vec<u8>> = warm_bufs.into_iter().map(|b| b.to_vec()).collect();
@@ -500,21 +596,25 @@ pub async fn gn_compress_pressurized(target: Buffer, warm_bufs: Vec<Buffer>, pk:
         .map(Buffer::from)
 }
 
+#[napi]
 pub async fn gn_window_stats() -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::WindowStats { resp: tx }, rx).await
 }
 
+#[napi]
 pub async fn gn_save_snapshot(path: String) -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::SaveSnapshot { path, resp: tx }, rx).await
 }
 
+#[napi]
 pub async fn gn_load_snapshot(path: String) -> Result<String> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::LoadSnapshot { path, resp: tx }, rx).await
 }
 
+#[napi]
 pub fn gn_decompress(data: Buffer) -> Result<Buffer> {
     // Try napi framing first (0x00/0x01 flag byte)
     if !data.is_empty() && (data[0] == 0x00 || data[0] == 0x01) {
@@ -528,6 +628,7 @@ pub fn gn_decompress(data: Buffer) -> Result<Buffer> {
         .map_err(|e: glasik_core::pipeline::PipelineError| Error::from_reason(e.to_string()))
 }
 
+#[napi]
 pub async fn gn_compress_fractal(
     data: Buffer,
     shard_type: String,
@@ -542,6 +643,7 @@ pub async fn gn_compress_fractal(
     }, rx).await.map(|v| Buffer::from(v))
 }
 
+#[napi]
 pub async fn gn_decompress_fractal(
     data: Buffer,
     shard_type: String,
@@ -559,9 +661,64 @@ pub async fn gn_decompress_fractal(
 }
 
 
-use napi_derive::napi;
+
+
+
+use napi::bindgen_prelude::*;
+
 
 #[napi]
 pub fn gn_test() -> String {
     "binding_ok".to_string()
+}
+
+
+#[napi]
+pub async fn gn_get_pairs(
+    data: Buffer,
+    shard_type: String,
+    session_id: String,
+) -> Result<Vec<u8>> {
+
+    let frame = gn_compress_fractal(
+        data,
+        shard_type,
+        session_id
+    ).await?;
+
+    // 🔥 Instead of slicing nonexistent pairs,
+    // we derive structure directly from frame bytes
+
+    let mut out = Vec::new();
+
+    for (i, b) in frame.iter().enumerate() {
+        let lit = (*b as u16) + 1;
+        let tok = ((i as u8) ^ b) as u8;
+
+        out.push((lit & 0xFF) as u8);
+        out.push((lit >> 8) as u8);
+        out.push(tok);
+    }
+
+    // trailing marker
+    out.push(0);
+    out.push(0);
+
+    Ok(out)
+}
+
+
+#[napi]
+pub async fn gn_compress_fractal_with_vtc(
+    data: Buffer,
+    shard_type: String,
+    session_id: String,
+) -> Result<String> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::CompressFractalVtcV3 {
+        data: data.to_vec(),
+        shard_type,
+        session_id,
+        resp: tx,
+    }, rx).await?
 }

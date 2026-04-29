@@ -18,6 +18,8 @@ enum Job {
     CompressSplit { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressSplitBatch { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<Vec<u8>> },
     SplitRaw { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
+    SplitInterleaved { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
+    MergeInterleaved { pairs: Vec<u8>, literals: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
     DecompressL2 { data: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
     CompressFast { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     CompressL2 { data: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
@@ -273,6 +275,21 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         }
                         let _ = resp.send((all_toks, all_lits));
                     }
+                    Job::SplitInterleaved { chunks, resp } => {
+                        let mut all_pairs: Vec<u8> = Vec::new();
+                        let mut all_lits: Vec<u8> = Vec::new();
+                        for chunk in &chunks {
+                            let (p, l) = slider.encode_ac_interleaved(chunk);
+                            all_pairs.extend_from_slice(&p);
+                            all_lits.extend_from_slice(&l);
+                        }
+                        let _ = resp.send((all_pairs, all_lits));
+                    }
+                    Job::MergeInterleaved { pairs, literals, resp } => {
+                        let result = slider.decode_ac_interleaved(&pairs, &literals)
+                            .map_err(Error::from_reason);
+                        let _ = resp.send(result);
+                    }
                     Job::CompressSplitBatch { chunks, resp } => {
                         // Batch split-stream: collect ALL tok/lit streams across chunks
                         // deflate combined streams once -- eliminates per-chunk header overhead
@@ -288,42 +305,18 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         let _ = resp.send(split_deflate(all_toks, all_lits));
                     }
                     Job::DecompressL2 { data, resp } => {
-                        // Inflate then decode tokens using current window vocab
-                        let result = (|| -> napi::Result<Vec<u8>> {
-                            if data.is_empty() { return Ok(Vec::new()); }
-                            let flag = data[0];
-                            let payload = &data[1..];
-                            let tokenized = if flag == FLAG_DEFLATED {
-                                // Inflate first
-                                let mut decomp = libdeflater::Decompressor::new();
-                                let mut out = vec![0u8; payload.len().max(64) * 8];
-                                loop {
-                                    match decomp.deflate_decompress(payload, &mut out) {
-                                        Ok(n) => { out.truncate(n); break out; }
-                                        Err(_) => {
-                                            let nl = out.len() * 2;
-                                            if nl > 64*1024*1024 {
-                                                return Err(Error::from_reason("inflate overflow"));
-                                            }
-                                            out.resize(nl, 0);
-                                        }
-                                    }
-                                }
-                            } else {
-                                // Raw tokenized -- decode directly
-                                payload.to_vec()
-                            };
-                            slider.decode_raw(&tokenized)
-                                .map_err(Error::from_reason)
-                        })();
+                        // Use pipeline decompress (same as gn_decompress) -- proven round-trip safe
+                        let result = pipeline::decompress(&data)
+                            .map_err(|e| Error::from_reason(e.to_string()));
                         let _ = resp.send(result);
                     }
                     Job::CompressFast { data, resp } => {
                         let _ = resp.send(compress_lz77gn(&data, &tok4));
                     }
                     Job::CompressL2 { data, resp } => {
-                        let t = slider.encode(&data);
-                        let _ = resp.send(deflate_buf(t));
+                        // Use pipeline compress (same as gn_compress) -- proven round-trip safe
+                        let t = pipeline::compress(&data);
+                        let _ = resp.send(t);
                     }
                     Job::RefreshVocab { resp } => {
                         // Sync fast tokenizer from L2 window (uses u16 -- all entries)
@@ -531,6 +524,22 @@ pub async fn gn_split_raw(chunks: Vec<Buffer>) -> Result<Vec<Buffer>> {
         .map(|(toks, lits)| vec![Buffer::from(toks), Buffer::from(lits)])
 }
 
+
+#[napi]
+pub async fn gn_split_interleaved(chunks: Vec<Buffer>) -> Result<Vec<Buffer>> {
+    let vecs: Vec<Vec<u8>> = chunks.iter().map(|b| b.to_vec()).collect();
+    let (tx, rx) = oneshot::channel();
+    let (pairs, lits) = send_job(Job::SplitInterleaved { chunks: vecs, resp: tx }, rx).await?;
+    Ok(vec![Buffer::from(pairs), Buffer::from(lits)])
+}
+
+#[napi]
+pub async fn gn_merge_interleaved(pairs: Buffer, literals: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    let result = send_job(Job::MergeInterleaved { pairs: pairs.to_vec(), literals: literals.to_vec(), resp: tx }, rx).await??;
+    Ok(Buffer::from(result))
+}
+
 #[napi]
 pub async fn gn_compress_split_batch(chunks: Vec<Buffer>) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
@@ -579,6 +588,13 @@ pub async fn gn_compress_l2(data: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::CompressL2 { data: data.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
+}
+
+#[napi]
+pub async fn gn_decompress_l2(data: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    let result = send_job(Job::DecompressL2 { data: data.to_vec(), resp: tx }, rx).await??;
+    Ok(Buffer::from(result))
 }
 
 #[napi]
