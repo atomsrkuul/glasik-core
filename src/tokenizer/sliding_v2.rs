@@ -286,16 +286,25 @@ impl SlidingTokenizerV2 {
     }
 
     pub fn decode_ac_interleaved(&self, pairs: &[u8], literals: &[u8]) -> Result<Vec<u8>, String> {
-        // Must use same filtered+sorted entries that build_ac used for encoding
-        let active = self.active_entries();
-        let mut filtered: Vec<crate::tokenizer::dictionary::DictEntry> = active.into_iter()
-            .filter(|e| e.bytes.len() >= 4)
-            .collect();
-        filtered.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
-        crate::tokenizer::codon::decode_ac_interleaved(pairs, literals, &filtered)
+        // Use same cached_entries that build_ac used -- no filter, no re-sort
+        crate::tokenizer::codon::decode_ac_interleaved(pairs, literals, &self.cached_entries)
     }
 
-        pub fn encode_ac_split(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    
+    pub fn encode_ac_split_v2(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let _ = self.get_index();
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::encode_ac_split_v2(buf, ac)
+        } else {
+            (Vec::new(), buf.to_vec())
+        }
+    }
+
+    pub fn decode_ac_split_v2(&self, toks: &[u8], lits: &[u8]) -> Vec<u8> {
+        crate::tokenizer::codon::decode_ac_split_v2(toks, lits, &self.cached_entries)
+    }
+
+    pub fn encode_ac_split(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let _ = self.get_index();
         if let Some(ref ac) = self.cached_ac {
             crate::tokenizer::codon::encode_ac_split(buf, ac)

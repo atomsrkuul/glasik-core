@@ -1,26 +1,34 @@
-// gni-compression 3.1.0
 "use strict";
 const path = require("path");
 const fs = require("fs");
-const binding = require(path.join(__dirname, `gn-native.${process.platform}-${process.arch}-gnu.node`));
+const zlib = require("zlib");
 
-const snapPath = path.join(__dirname, "gn-l0-multicorpus.snapshot");
-if (fs.existsSync(snapPath)) {
-  binding.gnLoadSnapshot(snapPath).catch(() => {});
+const native = require("./gn-native.linux-x64-gnu.node");
+const DICT = fs.readFileSync(path.join(__dirname, "dict/gcdict.bin"));
+
+async function compress(buf) {
+  const [toks, lits] = await native.gnSplitRawV2(buf);
+  let cLit;
+  try { cLit = zlib.deflateRawSync(lits, {level:6, dictionary:DICT}); }
+  catch(e) { cLit = zlib.deflateRawSync(lits, {level:6}); }
+  const cTok = zlib.deflateRawSync(toks, {level:6});
+  // format: [4 bytes tok len][compressed toks][compressed lits]
+  const out = Buffer.allocUnsafe(4 + cTok.length + cLit.length);
+  out.writeUInt32LE(cTok.length, 0);
+  cTok.copy(out, 4);
+  cLit.copy(out, 4 + cTok.length);
+  return out;
 }
 
-class GNCompressor {
-  async compress(data) {
-    const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
-    return binding.gnCompress(buf);
-  }
-  async decompress(compressed) {
-    return binding.gnDecompress(compressed);
-  }
+async function decompress(buf) {
+  const tokLen = buf.readUInt32LE(0);
+  const cTok = buf.slice(4, 4 + tokLen);
+  const cLit = buf.slice(4 + tokLen);
+  const toks = zlib.inflateRawSync(cTok);
+  let lits;
+  try { lits = zlib.inflateRawSync(cLit, {dictionary:DICT}); }
+  catch(e) { lits = zlib.inflateRawSync(cLit); }
+  return Buffer.from(await native.gnMergeRawV2(toks, lits));
 }
 
-const gnCompress = binding.gnCompress;
-const gnDecompress = binding.gnDecompress;
-const gnCompressAc = binding.gnCompressAc;
-
-module.exports = { GNCompressor, gnCompress, gnDecompress, gnCompressAc, native: binding };
+module.exports = { compress, decompress, native };

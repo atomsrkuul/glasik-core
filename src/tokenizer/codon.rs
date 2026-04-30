@@ -300,6 +300,68 @@ pub fn encode_ac_split(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, 
 /// Returns (pairs, literals) where pairs = [(2B lit_count LE)(1B tok_id)...]
 /// followed by 2B trailing_lit_count LE.
 /// Decoder needs only pairs + literals + vocab -- no original buffer required.
+
+/// Split-stream v2: tok_stream = [(delta_pos:u16 LE)(tok_id:u8)]*, lits = all literal bytes
+/// delta_pos = distance from end of previous token match to start of this one
+/// Fully self-contained for decompression -- no original buffer needed
+pub fn encode_ac_split_v2(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>) {
+    let mut toks: Vec<u8> = Vec::new();
+    let mut lits: Vec<u8> = Vec::new();
+    let mut pos = 0usize;
+
+    for m in ac.find_iter(buf) {
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx >= 254 { continue; }
+        // literals before this match
+        lits.extend_from_slice(&buf[pos..m.start()]);
+        let mut v = (m.start() - pos) as u64;
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 { b |= 0x80; }
+            toks.push(b);
+            if v == 0 { break; }
+        }
+        toks.push((pat_idx + 1) as u8);
+        pos = m.end();
+    }
+    lits.extend_from_slice(&buf[pos..]);
+    (toks, lits)
+}
+
+/// Decode split-stream v2: reconstruct original from tok_stream + lits
+pub fn decode_ac_split_v2(toks: &[u8], lits: &[u8], entries: &[crate::tokenizer::dictionary::DictEntry]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut lit_pos = 0usize;
+    let mut tok_pos = 0usize;
+
+    while tok_pos < toks.len() {
+        let mut delta: usize = 0;
+        let mut shift = 0usize;
+        loop {
+            if tok_pos >= toks.len() { break; }
+            let b = toks[tok_pos];
+            tok_pos += 1;
+            delta |= ((b & 0x7f) as usize) << shift;
+            shift += 7;
+            if b & 0x80 == 0 { break; }
+        }
+        if tok_pos >= toks.len() { break; }
+        let tok_id = toks[tok_pos] as usize;
+        tok_pos += 1;
+        // emit delta literals
+        out.extend_from_slice(&lits[lit_pos..lit_pos + delta]);
+        lit_pos += delta;
+        // emit token expansion
+        if tok_id > 0 && tok_id <= entries.len() {
+            out.extend_from_slice(&entries[tok_id - 1].bytes);
+        }
+    }
+    // trailing literals
+    out.extend_from_slice(&lits[lit_pos..]);
+    out
+}
+
 pub fn encode_ac_interleaved(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>) {
     let mut pairs: Vec<u8> = Vec::new();
     let mut literals: Vec<u8> = Vec::new();
@@ -312,11 +374,9 @@ pub fn encode_ac_interleaved(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec
             pairs.extend_from_slice(&(lit_count as u16).to_le_bytes());
             pairs.push((pat_idx + 1) as u8);
             literals.extend_from_slice(&buf[pos..m.start()]);
-        } else {
-            // beyond range -- treat match as literals, no pair emitted
-            literals.extend_from_slice(&buf[pos..m.end()]);
+            pos = m.end();
         }
-        pos = m.end();
+        // pat_idx >= 254: skip match, leave bytes as trailing literals
     }
     // trailing literals count (2B LE)
     let trailing = buf.len() - pos;
