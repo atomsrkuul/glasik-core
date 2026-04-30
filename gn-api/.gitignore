@@ -1,0 +1,5 @@
+node_modules/
+keys.db
+.env
+gn-native.linux-x64-gnu.node
+*.snapshot
