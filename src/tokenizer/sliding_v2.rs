@@ -304,6 +304,29 @@ impl SlidingTokenizerV2 {
         crate::tokenizer::codon::decode_ac_split_v2(toks, lits, &self.cached_entries)
     }
 
+    pub fn encode_ac_split_v3(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        self.get_index();
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::encode_ac_split_v3(buf, ac)
+        } else { (Vec::new(), buf.to_vec()) }
+    }
+
+    pub fn decode_ac_split_v3(&self, toks: &[u8], lits: &[u8]) -> Vec<u8> {
+        crate::tokenizer::codon::decode_ac_split_v3(toks, lits, &self.cached_entries)
+    }
+    pub fn encode_ac_split_v4(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        self.get_index();
+        if let Some(ref ac) = self.cached_ac {
+            crate::tokenizer::codon::encode_ac_split_v4(buf, ac)
+        } else {
+            (Vec::new(), buf.to_vec(), Vec::new())
+        }
+    }
+
+    pub fn decode_ac_split_v4(&self, toks: &[u8], lits: &[u8], runs: &[u8]) -> Vec<u8> {
+        crate::tokenizer::codon::decode_ac_split_v4(toks, lits, runs, &self.cached_entries)
+    }
+
     pub fn encode_ac_split(&mut self, buf: &[u8]) -> (Vec<u8>, Vec<u8>) {
         let _ = self.get_index();
         if let Some(ref ac) = self.cached_ac {

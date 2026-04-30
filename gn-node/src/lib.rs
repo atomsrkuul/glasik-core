@@ -19,6 +19,10 @@ enum Job {
     CompressSplitBatch { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<Vec<u8>> },
     SplitRaw { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
     SplitRawV2 { chunk: Vec<u8>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
+    SplitRawV3 { chunk: Vec<u8>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
+    MergeRawV3 { toks: Vec<u8>, lits: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
+    SplitRawV4 { chunk: Vec<u8>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>, Vec<u8>)> },
+    MergeRawV4 { toks: Vec<u8>, lits: Vec<u8>, runs: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     MergeRawV2 { toks: Vec<u8>, lits: Vec<u8>, resp: oneshot::Sender<Vec<u8>> },
     SplitInterleaved { chunks: Vec<Vec<u8>>, resp: oneshot::Sender<(Vec<u8>, Vec<u8>)> },
     MergeInterleaved { pairs: Vec<u8>, literals: Vec<u8>, resp: oneshot::Sender<napi::Result<Vec<u8>>> },
@@ -285,6 +289,22 @@ fn get_worker() -> &'static mpsc::Sender<Job> {
                         let out = slider.decode_ac_split_v2(&toks, &lits);
                         let _ = resp.send(out);
                     }
+                    Job::SplitRawV3 { chunk, resp } => {
+                        let (toks, lits) = slider.encode_ac_split_v3(&chunk);
+                        let _ = resp.send((toks, lits));
+                    }
+                    Job::MergeRawV3 { toks, lits, resp } => {
+                        let out = slider.decode_ac_split_v3(&toks, &lits);
+                        let _ = resp.send(out);
+                    }
+                    Job::SplitRawV4 { chunk, resp } => {
+                        let (toks, lits, runs) = slider.encode_ac_split_v4(&chunk);
+                        let _ = resp.send((toks, lits, runs));
+                    }
+                    Job::MergeRawV4 { toks, lits, runs, resp } => {
+                        let out = slider.decode_ac_split_v4(&toks, &lits, &runs);
+                        let _ = resp.send(out);
+                    }
                     Job::SplitInterleaved { chunks, resp } => {
                         let mut all_pairs: Vec<u8> = Vec::new();
                         let mut all_lits: Vec<u8> = Vec::new();
@@ -546,6 +566,34 @@ pub async fn gn_split_raw_v2(chunk: Buffer) -> Result<Vec<Buffer>> {
 pub async fn gn_merge_raw_v2(toks: Buffer, lits: Buffer) -> Result<Buffer> {
     let (tx, rx) = oneshot::channel();
     send_job(Job::MergeRawV2 { toks: toks.to_vec(), lits: lits.to_vec(), resp: tx }, rx).await
+        .map(Buffer::from)
+}
+
+#[napi]
+pub async fn gn_split_raw_v3(chunk: Buffer) -> Result<Vec<Buffer>> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::SplitRawV3 { chunk: chunk.to_vec(), resp: tx }, rx).await
+        .map(|(toks, lits)| vec![Buffer::from(toks), Buffer::from(lits)])
+}
+
+#[napi]
+pub async fn gn_merge_raw_v3(toks: Buffer, lits: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::MergeRawV3 { toks: toks.to_vec(), lits: lits.to_vec(), resp: tx }, rx).await
+        .map(Buffer::from)
+}
+
+#[napi]
+pub async fn gn_split_raw_v4(chunk: Buffer) -> Result<Vec<Buffer>> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::SplitRawV4 { chunk: chunk.to_vec(), resp: tx }, rx).await
+        .map(|(toks, lits, runs)| vec![Buffer::from(toks), Buffer::from(lits), Buffer::from(runs)])
+}
+
+#[napi]
+pub async fn gn_merge_raw_v4(toks: Buffer, lits: Buffer, runs: Buffer) -> Result<Buffer> {
+    let (tx, rx) = oneshot::channel();
+    send_job(Job::MergeRawV4 { toks: toks.to_vec(), lits: lits.to_vec(), runs: runs.to_vec(), resp: tx }, rx).await
         .map(Buffer::from)
 }
 

@@ -362,6 +362,127 @@ pub fn decode_ac_split_v2(toks: &[u8], lits: &[u8], entries: &[crate::tokenizer:
     out
 }
 
+/// Split-stream v3: tok_stream = [tok_id:u8]*, lit_stream = [varint_lit_count][literal bytes...]* + trailing lits
+/// tok stream is pure token IDs (same as V1) — optimal for deflate
+/// position info lives in lit stream as varint count before each literal run
+pub fn encode_ac_split_v3(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>) {
+    let mut toks: Vec<u8> = Vec::new();
+    let mut lits: Vec<u8> = Vec::new();
+    let mut pos = 0usize;
+
+    for m in ac.find_iter(buf) {
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx >= 254 { continue; }
+        let lit_count = m.start() - pos;
+        // encode lit_count as LEB128 varint
+        let mut v = lit_count as u64;
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 { b |= 0x80; }
+            lits.push(b);
+            if v == 0 { break; }
+        }
+        lits.extend_from_slice(&buf[pos..m.start()]);
+        toks.push((pat_idx + 1) as u8);
+        pos = m.end();
+    }
+    // trailing: varint(0) signals end of token interleaving, then dump rest
+    lits.extend_from_slice(&buf[pos..]);
+    (toks, lits)
+}
+
+/// Decode split-stream v3
+pub fn decode_ac_split_v3(toks: &[u8], lits: &[u8], entries: &[crate::tokenizer::dictionary::DictEntry]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut lit_pos = 0usize;
+    let mut tok_pos = 0usize;
+
+    // Each entry in lits: [varint lit_count][literal bytes]
+    // After all tokens processed, remaining lits are trailing (no length prefix)
+    for &tok_id in toks {
+        // decode varint lit_count
+        let mut lit_count: usize = 0;
+        let mut shift = 0usize;
+        loop {
+            if lit_pos >= lits.len() { break; }
+            let b = lits[lit_pos];
+            lit_pos += 1;
+            lit_count |= ((b & 0x7f) as usize) << shift;
+            shift += 7;
+            if b & 0x80 == 0 { break; }
+        }
+        out.extend_from_slice(&lits[lit_pos..lit_pos + lit_count]);
+        lit_pos += lit_count;
+        let tid = tok_id as usize;
+        if tid > 0 && tid <= entries.len() {
+            out.extend_from_slice(&entries[tid - 1].bytes);
+        }
+    }
+    out.extend_from_slice(&lits[lit_pos..]);
+    out
+}
+
+
+/// V4: three separate streams — tok IDs, pure lits (identical to V1), varint run-lengths
+/// Decoder: for each token, read run_lengths[i] lit bytes, then emit entries[tok_id].bytes
+pub fn encode_ac_split_v4(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let mut toks: Vec<u8> = Vec::new();
+    let mut lits: Vec<u8> = Vec::new();
+    let mut runs: Vec<u8> = Vec::new();
+    let mut pos = 0usize;
+
+    for m in ac.find_iter(buf) {
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx >= 254 { continue; }
+        let lit_count = m.start() - pos;
+        // emit literal bytes (pure, no prefix)
+        lits.extend_from_slice(&buf[pos..m.start()]);
+        // encode lit_count as LEB128 varint into runs stream
+        let mut v = lit_count as u64;
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 { b |= 0x80; }
+            runs.push(b);
+            if v == 0 { break; }
+        }
+        toks.push((pat_idx + 1) as u8);
+        pos = m.end();
+    }
+    // trailing lits after last token
+    lits.extend_from_slice(&buf[pos..]);
+    (toks, lits, runs)
+}
+
+/// Decode V4
+pub fn decode_ac_split_v4(toks: &[u8], lits: &[u8], runs: &[u8], entries: &[crate::tokenizer::dictionary::DictEntry]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut lit_pos = 0usize;
+    let mut run_pos = 0usize;
+
+    for &tok_id in toks {
+        // decode varint from runs stream
+        let mut lit_count: usize = 0;
+        let mut shift = 0usize;
+        loop {
+            if run_pos >= runs.len() { break; }
+            let b = runs[run_pos]; run_pos += 1;
+            lit_count |= ((b & 0x7f) as usize) << shift;
+            shift += 7;
+            if b & 0x80 == 0 { break; }
+        }
+        out.extend_from_slice(&lits[lit_pos..lit_pos + lit_count]);
+        lit_pos += lit_count;
+        let tid = tok_id as usize;
+        if tid > 0 && tid <= entries.len() {
+            out.extend_from_slice(&entries[tid - 1].bytes);
+        }
+    }
+    out.extend_from_slice(&lits[lit_pos..]);
+    out
+}
+
 pub fn encode_ac_interleaved(buf: &[u8], ac: &aho_corasick::AhoCorasick) -> (Vec<u8>, Vec<u8>) {
     let mut pairs: Vec<u8> = Vec::new();
     let mut literals: Vec<u8> = Vec::new();
