@@ -1,6 +1,6 @@
 {
   "name": "gni-compression",
-  "version": "4.2.1",
+  "version": "4.3.0",
   "description": "Domain-adaptive lossless compression for LLM conversation streams",
   "main": "index.js",
   "types": "index.d.ts",
@@ -24,5 +24,12 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/atomsrkuul/glasik-core"
-  }
+  },
+  "files": [
+    "README.md",
+    "index.js",
+    "index.d.ts",
+    "gn-native.linux-x64-gnu.node",
+    "package.json"
+  ]
 }
