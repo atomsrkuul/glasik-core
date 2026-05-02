@@ -1,6 +1,6 @@
 {
   "name": "gni-compression",
-  "version": "4.3.0",
+  "version": "4.4.0",
   "description": "Domain-adaptive lossless compression for LLM conversation streams",
   "main": "index.js",
   "types": "index.d.ts",
@@ -30,6 +30,7 @@
     "index.js",
     "index.d.ts",
     "gn-native.linux-x64-gnu.node",
-    "package.json"
+    "package.json",
+    "dict/"
   ]
 }
