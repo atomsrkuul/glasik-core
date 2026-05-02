@@ -69,6 +69,7 @@ MIT
 
 ## arXiv
 
-Endorsed for submission to cs.IR.
-arXiv username: RobertRider00
+Seeking endorsement for cs.IR submission.
+Endorsement code: 7HWUBA
 Paper: *GN: Domain-Adaptive Lossless Compression for LLM Conversation Streams*
+Endorse at: https://arxiv.org/auth/endorse?x=7HWUBA
