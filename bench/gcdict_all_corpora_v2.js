@@ -129,7 +129,7 @@ async function bench(label, allTurns, seed) {
 const SEEDS = [1337, 2718, 31415];
 
 async function verifyRoundTrip(turns, label) {
-  const { gnCompress, gnDecompress } = require('../gn-node/index.js');
+  const { compress: gnCompress, decompress: gnDecompress } = require('../gn-node/index.js');
   let pass = 0, fail = 0;
   const sample = turns.slice(0, 50);
   for (const t of sample) {
