@@ -66,3 +66,9 @@ Application #2026-06-023.
 ## License
 
 MIT
+
+## arXiv
+
+Endorsed for submission to cs.IR.
+arXiv username: RobertRider00
+Paper: *GN: Domain-Adaptive Lossless Compression for LLM Conversation Streams*
