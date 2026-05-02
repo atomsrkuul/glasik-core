@@ -1,0 +1,7 @@
+GN-NATIVE: restored 20000 entries
+GN-NATIVE: fractal L0 loaded 20000 entries
+WildChat: orig=79444B v4=21019B ratio=3.780x brotli=2.263x vs_brotli=67.0% throughput=0.4MB/s
+ShareGPT: orig=16376B v4=5072B ratio=3.229x brotli=1.959x vs_brotli=64.8% throughput=1.6MB/s
+LMSYS: orig=22030B v4=6918B ratio=3.184x brotli=2.047x vs_brotli=55.6% throughput=1.9MB/s
+Ubuntu-IRC: orig=5886B v4=2786B ratio=2.113x brotli=1.173x vs_brotli=80.1% throughput=0.8MB/s
+Claude: orig=29897B v4=11168B ratio=2.677x brotli=1.930x vs_brotli=38.7% throughput=1.1MB/s
