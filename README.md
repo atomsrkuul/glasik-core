@@ -1,5 +1,9 @@
 # Glasik Notation Core
 
+[![npm version](https://img.shields.io/npm/v/gni-compression.svg)](https://www.npmjs.com/package/gni-compression)
+[![npm downloads](https://img.shields.io/npm/dm/gni-compression.svg)](https://www.npmjs.com/package/gni-compression)
+
+
 Glasik Notation Core is a Rust compression engine for LLM conversation data, agent memory, chat logs, and other repeated message-style text.
 
 The main idea is simple: normal compressors treat text as bytes, but conversation data has structure. Chats repeat roles, message shapes, JSON fields, tool-call patterns, prompt fragments, and common phrases. GN tries to learn that structure first, split it into cleaner streams, and then let normal compression work on something easier.
