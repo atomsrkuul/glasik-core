@@ -2,6 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/gni-compression.svg)](https://www.npmjs.com/package/gni-compression)
 [![npm downloads](https://img.shields.io/npm/dm/gni-compression.svg)](https://www.npmjs.com/package/gni-compression)
+[![Known Vulnerabilities](https://snyk.io/test/npm/gni-compression/badge.svg)](https://security.snyk.io/package/npm/gni-compression)
 
 
 Glasik Notation Core is a Rust compression engine for LLM conversation data, agent memory, chat logs, and other repeated message-style text.
