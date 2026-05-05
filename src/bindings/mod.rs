@@ -220,6 +220,43 @@ impl GlasikSlidingV2 {
     }
 
 
+    fn compress_ans(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        let tokenized = self.inner.encode(data);
+        let compressed = crate::codec::ans::compress(&tokenized);
+        let mut out = if compressed.len() < tokenized.len() {
+            let mut v = vec![0x01u8];
+            v.extend_from_slice(&compressed);
+            v
+        } else {
+            let mut v = vec![0x00u8];
+            v.extend_from_slice(&tokenized);
+            v
+        };
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn decompress_ans(&self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use pyo3::exceptions::PyRuntimeError;
+        if data.is_empty() {
+            return Ok(PyBytes::new(py, &[]).into());
+        }
+        let flag = data[0];
+        let payload = &data[1..];
+        let tokenized = if flag == 0x01 {
+            match crate::codec::ans::decompress(payload) {
+                Some(t) => t,
+                None => return Err(PyRuntimeError::new_err("ANS decompress failed")),
+            }
+        } else {
+            payload.to_vec()
+        };
+        match self.inner.decode(&tokenized) {
+            Ok(original) => Ok(PyBytes::new(py, &original).into()),
+            Err(e) => Err(PyRuntimeError::new_err(format!("decode failed: {}", e))),
+        }
+    }
+
+
     fn compress(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
         use flate2::{write::DeflateEncoder, Compression};
         use std::io::Write;
