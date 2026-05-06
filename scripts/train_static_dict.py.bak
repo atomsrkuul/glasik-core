@@ -16,7 +16,7 @@ print("Loading corpora...", flush=True)
 
 # ShareGPT
 chunks = []
-sgpt = json.loads(Path("/home/boot/Downloads/Corpora/sharegpt-v3.json").read_bytes())
+sgpt = json.loads(Path("/home/boot/Downloads/sharegpt-v3.json").read_bytes())
 for conv in sgpt:
     for turn in conv.get("conversations", []):
         v = turn.get("value", "")
@@ -26,7 +26,7 @@ training = chunks[:N_LLM]
 
 # WildChat
 wc_chunks = []
-for f in sorted(Path("/home/boot/Downloads/Corpora/WildChat").glob("*.parquet")):
+for f in sorted(Path("/home/boot/Downloads/WildChat").glob("*.parquet")):
     t = pq.read_table(f)
     for i in range(len(t)):
         for turn in t['conversation'][i].as_py():
@@ -38,7 +38,7 @@ print(f"WildChat: {len(wc_chunks[:N_LLM])} chunks", flush=True)
 
 # LMSYS
 lm_chunks = []
-for f in sorted(Path("/home/boot/Downloads/Corpora/lmsys").glob("*.parquet")):
+for f in sorted(Path("/home/boot/Downloads/lmsys").glob("*.parquet")):
     t = pq.read_table(f)
     for i in range(len(t)):
         conv = t['conversation'][i].as_py()
@@ -52,7 +52,7 @@ print(f"LMSYS: {len(lm_chunks[:N_LLM])} chunks", flush=True)
 
 # Ubuntu IRC
 irc_chunks = []
-with open("/home/boot/Downloads/Corpora/Ubuntu-dialogue-corpus/dialogueText.csv") as f:
+with open("/home/boot/Downloads/Ubuntu-dialogue-corpus/dialogueText.csv") as f:
     reader = csv.DictReader(f)
     for row in reader:
         text = row.get('text','').strip()
@@ -78,17 +78,11 @@ entries, batches = slider.stats()
 print(f"\nFinal window: {entries} entries after {batches} batches", flush=True)
 
 # Export window state
-raw_json = slider.export_dict_json()
-import json as _json
-_raw = _json.loads(raw_json)
-version = _raw["version"]
-exported = [(bytes(e["b"]), e["f"], e["s"]) for e in _raw["entries"]]
+version, exported = slider.export_dict()
 print(f"Exported {len(exported)} entries (version={version})", flush=True)
 
 # Sort by cumulative saving, take top 5000
 exported_sorted = sorted(exported, key=lambda x: x[2], reverse=True)
-exported_sorted = [e for e in exported_sorted if bytes(e[0]).strip(b' 	
-') != b'']
 top = exported_sorted[:5000]
 
 # Serialize to JSON

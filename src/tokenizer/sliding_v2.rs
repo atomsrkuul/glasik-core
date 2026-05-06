@@ -62,7 +62,8 @@ impl SlidingTokenizerV2 {
         self.batch_count += 1;
         if changed {
             self.dict_version = self.dict_version.wrapping_add(1);
-            self.index_dirty = self.batch_count % 10 == 0;
+            self.ac_dirty = true;
+            if self.batch_count % 10 == 0 { self.index_dirty = true; }
         }
     }
 
@@ -89,8 +90,8 @@ impl SlidingTokenizerV2 {
         let changed = self.update_window(&batch_entries);
         if changed {
             self.dict_version = self.dict_version.wrapping_add(1);
+            self.ac_dirty = true;
             self.index_dirty = true;
-            if self.batch_count % 50 == 0 { self.ac_dirty = true; }
         }
 
         let tokenized = if self.window.is_empty() {

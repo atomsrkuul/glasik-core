@@ -110,6 +110,41 @@ impl FreqTable {
     }
 }
 
+pub fn compress_with_table(data: &[u8], freq: &FreqTable) -> Vec<u8> {
+    let mut hdr = Vec::new();
+    hdr.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    if data.is_empty() {
+        hdr.extend_from_slice(&0u32.to_le_bytes());
+        return hdr;
+    }
+
+    let total = freq.total;
+    let mut x: u32 = total;
+    let mut stream: Vec<u8> = Vec::new();
+
+    for &sym in data.iter().rev() {
+        let s = sym as usize;
+        let f = freq.freq[s].max(1);
+        let cs = freq.cumsum[s];
+        while x >= f * 256 {
+            stream.push((x & 0xFF) as u8);
+            x >>= 8;
+        }
+        x = (x / f) * total + (x % f) + cs;
+    }
+
+    while x > 0 {
+        stream.push((x & 0xFF) as u8);
+        x >>= 8;
+    }
+    stream.reverse();
+
+    let mut out = hdr;
+    out.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+    out.extend(stream);
+    out
+}
+
 pub fn compress(data: &[u8]) -> Vec<u8> {
     let freq = FreqTable::build(data);
     let fb = freq.serialize();
@@ -154,6 +189,54 @@ pub fn compress(data: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&(stream.len() as u32).to_le_bytes());
     out.extend(stream);
     out
+}
+
+pub fn decompress_with_table(data: &[u8], freq: &FreqTable) -> Option<Vec<u8>> {
+    if data.len() < 4 {
+        return None;
+    }
+    let orig = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    if orig == 0 {
+        return Some(vec![]);
+    }
+    if data.len() < 8 {
+        return None;
+    }
+    let slen = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    let stream = &data[8..8 + slen.min(data.len() - 8)];
+
+    let total = freq.total;
+    let mut x: u32 = 0;
+    let mut pos = 0usize;
+
+    while pos < stream.len() && x < total {
+        x = (x << 8) | stream[pos] as u32;
+        pos += 1;
+    }
+
+    let mut out = Vec::with_capacity(orig);
+
+    while out.len() < orig {
+        let r = x % total;
+        let s = freq.find_sym(r);
+        let f = freq.freq[s];
+        let cs = freq.cumsum[s];
+        let q = x / total;
+        let prev_x = q * f + (r - cs);
+        out.push(s as u8);
+        x = prev_x;
+
+        while x < total && pos < stream.len() {
+            x = (x << 8) | stream[pos] as u32;
+            pos += 1;
+        }
+    }
+
+    if out.len() == orig {
+        Some(out)
+    } else {
+        None
+    }
 }
 
 pub fn decompress(data: &[u8]) -> Option<Vec<u8>> {
@@ -328,7 +411,10 @@ fn build_o1_tables(data: &[u8]) -> Box<[Option<FreqTable>; 256]> {
     let mut tables: Box<[Option<FreqTable>; 256]> = Box::new(std::array::from_fn(|_| None));
     for ctx in 0..256 {
         if counts[ctx] > 0 {
-            tables[ctx] = Some(FreqTable::normalize(&raw[ctx], counts[ctx]));
+            let mut smoothed = raw[ctx];
+            for s in 0..256 { smoothed[s] = smoothed[s].max(1); }
+            let n: usize = smoothed.iter().map(|&x| x as usize).sum();
+            tables[ctx] = Some(FreqTable::normalize(&smoothed, n));
         }
     }
     tables
@@ -555,4 +641,74 @@ mod tests {
         println!("o0 1KB: {}->{}  {:.2}x", d.len(), c0.len(), d.len() as f64 / c0.len() as f64);
         println!("o1 1KB: {}->{}  {:.2}x", d.len(), c1.len(), d.len() as f64 / c1.len() as f64);
     }
+}
+
+pub fn train_o1(data: &[u8]) -> Vec<u8> {
+    let tables = build_o1_tables(data);
+    serialize_o1(&tables)
+}
+
+
+pub fn compress_o1_pretrained(data: &[u8], table_bytes: &[u8]) -> Option<Vec<u8>> {
+    let (tables, _) = deserialize_o1(table_bytes)?;
+    let fallback = o1_fallback();
+    let n = data.len();
+    let mut hdr = (n as u32).to_le_bytes().to_vec();
+    if n == 0 {
+        hdr.extend_from_slice(&0u32.to_le_bytes());
+        return Some(hdr);
+    }
+    let mut x: u32 = fallback.total;
+    let mut stream: Vec<u8> = Vec::new();
+    for i in (0..n).rev() {
+        let sym = data[i] as usize;
+        let ctx = if i == 0 { 0usize } else { data[i-1] as usize };
+        // Use context table if present, fallback (uniform) otherwise
+        let tbl = tables[ctx].as_ref().unwrap_or(&fallback);
+        let f = tbl.freq[sym];
+        let cs = tbl.cumsum[sym];
+        let tot = tbl.total;
+        while x >= f * 256 { stream.push((x & 0xFF) as u8); x >>= 8; }
+        x = (x / f) * tot + (x % f) + cs;
+    }
+    while x > 0 { stream.push((x & 0xFF) as u8); x >>= 8; }
+    stream.reverse();
+    let mut out = hdr;
+    out.extend_from_slice(&(stream.len() as u32).to_le_bytes());
+    out.extend(stream);
+    Some(out)
+}
+
+pub fn decompress_o1_pretrained(data: &[u8], table_bytes: &[u8]) -> Option<Vec<u8>> {
+    let (tables, _) = deserialize_o1(table_bytes)?;
+    if data.len() < 8 { return None; }
+    let orig = u32::from_le_bytes(data[0..4].try_into().ok()?) as usize;
+    if orig == 0 { return Some(vec![]); }
+    let slen = u32::from_le_bytes(data[4..8].try_into().ok()?) as usize;
+    let stream = &data[8..8 + slen.min(data.len() - 8)];
+    let fallback = o1_fallback();
+    let init_total = fallback.total;
+    let mut x: u32 = 0;
+    let mut pos = 0usize;
+    while pos < stream.len() && x < init_total {
+        x = (x << 8) | stream[pos] as u32; pos += 1;
+    }
+    let mut out = Vec::with_capacity(orig);
+    let mut prev: usize = 0;
+    while out.len() < orig {
+        let tbl = tables[prev].as_ref().unwrap_or(&fallback);
+        let tot = tbl.total;
+        let r = x % tot;
+        let s = tbl.find_sym(r);
+        let f = tbl.freq[s];
+        let cs = tbl.cumsum[s];
+        let q = x / tot;
+        x = q * f + (r - cs);
+        out.push(s as u8);
+        prev = s;
+        while x < tot && pos < stream.len() {
+            x = (x << 8) | stream[pos] as u32; pos += 1;
+        }
+    }
+    if out.len() == orig { Some(out) } else { None }
 }

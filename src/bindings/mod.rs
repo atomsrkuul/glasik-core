@@ -8,6 +8,30 @@ fn gn_compress(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
 }
 
 #[pyfunction]
+fn gn_compress_o1(py: Python, data: &[u8], freq_table: &[u8]) -> PyResult<Py<PyBytes>> {
+    // Full GNC pipeline: tokenize -> o1 ANS pretrained (no deflate)
+    let tok = crate::tokenizer::Tokenizer::new();
+    let (tokenized, _) = tok.encode(data);
+    match crate::codec::ans::compress_o1_pretrained(&tokenized, freq_table) {
+        Some(c) => Ok(PyBytes::new(py, &c).into()),
+        None => Err(pyo3::exceptions::PyValueError::new_err("o1 compress failed")),
+    }
+}
+
+#[pyfunction]
+fn gn_decompress_o1(py: Python, data: &[u8], freq_table: &[u8]) -> PyResult<Py<PyBytes>> {
+    let tok = crate::tokenizer::Tokenizer::new();
+    match crate::codec::ans::decompress_o1_pretrained(data, freq_table) {
+        Some(tokenized) => {
+            tok.decode(&tokenized)
+                .map(|d| PyBytes::new(py, &d).into())
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+        }
+        None => Err(pyo3::exceptions::PyValueError::new_err("o1 decompress failed")),
+    }
+}
+
+#[pyfunction]
 fn gn_decompress(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
     decompress(data)
         .map(|d| PyBytes::new(py, &d).into())
@@ -77,7 +101,7 @@ impl GlasikSliding {
         let tokenized = self.inner.encode(data);
 
         // Auto-select: deflate or codon-only
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         enc.write_all(&tokenized).map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         let deflated = enc.finish().map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
@@ -155,6 +179,36 @@ fn gn_ans_decompress_o1(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
 }
 
 
+#[pyfunction]
+fn gn_ans_train(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    let freq = crate::codec::ans::FreqTable::build(data);
+    Ok(PyBytes::new(py, &freq.serialize()).into())
+}
+
+#[pyfunction]
+fn gn_ans_compress_pretrained(py: Python, data: &[u8], freq_bytes: &[u8]) -> PyResult<Py<PyBytes>> {
+    match crate::codec::ans::FreqTable::deserialize(freq_bytes) {
+        Some((freq, _)) => {
+            let compressed = crate::codec::ans::compress_with_table(data, &freq);
+            Ok(PyBytes::new(py, &compressed).into())
+        }
+        None => Err(pyo3::exceptions::PyValueError::new_err("invalid freq table")),
+    }
+}
+
+#[pyfunction]
+fn gn_ans_decompress_pretrained(py: Python, data: &[u8], freq_bytes: &[u8]) -> PyResult<Py<PyBytes>> {
+    match crate::codec::ans::FreqTable::deserialize(freq_bytes) {
+        Some((freq, _)) => {
+            match crate::codec::ans::decompress_with_table(data, &freq) {
+                Some(d) => Ok(PyBytes::new(py, &d).into()),
+                None => Err(pyo3::exceptions::PyValueError::new_err("ANS decompress failed")),
+            }
+        }
+        None => Err(pyo3::exceptions::PyValueError::new_err("invalid freq table")),
+    }
+}
+
 /// Stateful sliding window compressor v2 -- external dictionary, no per-frame overhead.
 #[pyclass]
 pub struct GlasikSlidingV2 {
@@ -193,7 +247,7 @@ impl GlasikSlidingV2 {
         use std::io::Write;
         use pyo3::exceptions::PyRuntimeError;
         let tokenized = self.inner.encode_ac(data);
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
@@ -206,7 +260,7 @@ impl GlasikSlidingV2 {
         use pyo3::exceptions::PyRuntimeError;
         let active = self.inner.active_entries_pub();
         let tokenized = crate::tokenizer::codon::encode_ac(data, &active);
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
@@ -233,6 +287,58 @@ impl GlasikSlidingV2 {
             v
         };
         Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn compress_backref(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        let tokenized = self.inner.encode_ac(data);
+        let backreffed = crate::codec::backref::compress(&tokenized);
+        let out = if backreffed.len() < tokenized.len() { backreffed } else { tokenized };
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+
+    fn compress_v4(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        let tokenized = self.inner.encode_ac(data);
+        let backreffed = crate::codec::backref::compress(&tokenized);
+        let ans_out = crate::codec::ans::compress(&backreffed);
+        let out = if ans_out.len() < backreffed.len() {
+            let mut v = vec![0x01u8];
+            v.extend_from_slice(&ans_out);
+            v
+        } else {
+            let mut v = vec![0x00u8];
+            v.extend_from_slice(&backreffed);
+            v
+        };
+        Ok(PyBytes::new(py, &out).into())
+    }
+
+    fn decompress_v4(&self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use pyo3::exceptions::PyRuntimeError;
+        if data.is_empty() { return Ok(PyBytes::new(py, &[]).into()); }
+        let flag = data[0];
+        let payload = &data[1..];
+        let backreffed = if flag == 0x01 {
+            match crate::codec::ans::decompress(payload) {
+                Some(d) => d,
+                None => return Err(PyRuntimeError::new_err("v4 ANS decompress failed")),
+            }
+        } else {
+            payload.to_vec()
+        };
+        let tokenized = crate::codec::backref::decompress(&backreffed);
+        match self.inner.decode_raw(&tokenized) {
+            Ok(original) => Ok(PyBytes::new(py, &original).into()),
+            Err(e) => Err(PyRuntimeError::new_err(format!("v4 decode failed: {}", e))),
+        }
+    }
+    fn decompress_backref(&self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+        use pyo3::exceptions::PyRuntimeError;
+        let debackreffed = crate::codec::backref::decompress(data);
+        match self.inner.decode_raw(&debackreffed) {
+            Ok(original) => Ok(PyBytes::new(py, &original).into()),
+            Err(e) => Err(PyRuntimeError::new_err(format!("backref decode failed: {}", e))),
+        }
     }
 
     fn decompress_ans(&self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
@@ -264,7 +370,7 @@ impl GlasikSlidingV2 {
         let tokenized = self.inner.encode(data);
 
         // Deflate the tokenized output (dict not in frame, so deflate sees clean data)
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         let _ = enc.write_all(&tokenized);
         let deflated = enc.finish().unwrap_or_default();
 
@@ -326,22 +432,22 @@ impl GlasikSlidingV2 {
 
 /// Level 4 sliding window with fractal dictionary compression
 #[pyclass]
-pub struct GlasikSlidingL4 {
-    inner: crate::sliding_v2_l4::SlidingTokenizerL4,
+pub struct GlasikSlidingV3 {
+    inner: crate::sliding_v3::SlidingTokenizerV3,
 }
 
 #[pymethods]
-impl GlasikSlidingL4 {
+impl GlasikSlidingV3 {
     #[new]
     fn new() -> Self {
-        GlasikSlidingL4 { inner: crate::sliding_v2_l4::SlidingTokenizerL4::new() }
+        GlasikSlidingV3 { inner: crate::sliding_v3::SlidingTokenizerV3::new() }
     }
 
     #[staticmethod]
-    fn with_bundled_dict() -> GlasikSlidingL4 {
+    fn with_bundled_dict() -> GlasikSlidingV3 {
         let entries = crate::static_dict::load_static_dict();
-        GlasikSlidingL4 {
-            inner: crate::sliding_v2_l4::SlidingTokenizerL4::new_with_static(entries),
+        GlasikSlidingV3 {
+            inner: crate::sliding_v3::SlidingTokenizerV3::new_with_static(entries),
         }
     }
 
@@ -355,7 +461,7 @@ impl GlasikSlidingL4 {
         use pyo3::exceptions::PyRuntimeError;
 
         let tokenized = self.inner.encode(data);
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
@@ -371,9 +477,9 @@ impl GlasikSlidingL4 {
     }
 
     #[staticmethod]
-    fn from_snapshot(py: Python, snapshot: &[u8]) -> GlasikSlidingL4 {
-        GlasikSlidingL4 {
-            inner: crate::sliding_v2_l4::SlidingTokenizerL4::restore_from_snapshot(snapshot),
+    fn from_snapshot(py: Python, snapshot: &[u8]) -> GlasikSlidingV3 {
+        GlasikSlidingV3 {
+            inner: crate::sliding_v3::SlidingTokenizerV3::restore_from_snapshot(snapshot),
         }
     }
 }
@@ -416,7 +522,7 @@ impl GNHybridEncoder {
         use std::io::Write;
         use pyo3::exceptions::PyRuntimeError;
         let tokenized = self.inner.encode(data);
-        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let out = if deflated.len() < tokenized.len() { deflated } else { tokenized };
@@ -449,6 +555,8 @@ impl GNHybridAsync {
 #[pymodule]
 fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_compress, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_compress_o1, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_decompress_o1, m)?)?;
     m.add_function(wrap_pyfunction!(gn_decompress, m)?)?;
     m.add_function(wrap_pyfunction!(gn_compress_stats, m)?)?;
     m.add_function(wrap_pyfunction!(gn_compress_batch, m)?)?;
@@ -460,8 +568,36 @@ fn glasik_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gn_ans_decompress_bits, m)?)?;
     m.add_function(wrap_pyfunction!(gn_ans_compress_o1, m)?)?;
     m.add_function(wrap_pyfunction!(gn_ans_decompress_o1, m)?)?;
+
+#[pyfunction]
+fn gn_ans_train_o1(py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
+    let tbl = crate::codec::ans::train_o1(data);
+    Ok(PyBytes::new(py, &tbl).into())
+}
+
+#[pyfunction]
+fn gn_ans_compress_pretrained_o1(py: Python, data: &[u8], tbl: &[u8]) -> PyResult<Py<PyBytes>> {
+    match crate::codec::ans::compress_o1_pretrained(data, tbl) {
+        Some(c) => Ok(PyBytes::new(py, &c).into()),
+        None => Err(pyo3::exceptions::PyValueError::new_err("compress_o1_pretrained failed")),
+    }
+}
+
+#[pyfunction]
+fn gn_ans_decompress_pretrained_o1(py: Python, data: &[u8], tbl: &[u8]) -> PyResult<Py<PyBytes>> {
+    match crate::codec::ans::decompress_o1_pretrained(data, tbl) {
+        Some(d) => Ok(PyBytes::new(py, &d).into()),
+        None => Err(pyo3::exceptions::PyValueError::new_err("decompress_o1_pretrained failed")),
+    }
+}
+    m.add_function(wrap_pyfunction!(gn_ans_train, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_ans_train_o1, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_ans_compress_pretrained_o1, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_ans_decompress_pretrained_o1, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_ans_compress_pretrained, m)?)?;
+    m.add_function(wrap_pyfunction!(gn_ans_decompress_pretrained, m)?);
     m.add_class::<GlasikSlidingV2>()?;
-    m.add_class::<GlasikSlidingL4>()?;
+    m.add_class::<GlasikSlidingV3>()?;
     m.add_class::<GNHybridEncoder>()?;
     m.add_class::<GNHybridAsync>()?;
     m.add_function(wrap_pyfunction!(gn_compress_parallel, m)?)?;
