@@ -8,7 +8,6 @@
 //! The pipeline measures both and picks the winner.
 
 use crate::codec::frame::{self, Frame, FrameError};
-use crate::ans_table::ANS_O1_TABLE;
 use crate::tokenizer::codon;
 use crate::tokenizer::dictionary;
 use crate::tokenizer::{Tokenizer, TOK_MAGIC};
@@ -18,7 +17,6 @@ use std::io::{Read, Write};
 // Flag byte in GN frame flags field
 pub const FLAG_COMPRESSION: u8 = 0x01;
 pub const FLAG_CODON_ONLY: u8 = 0x02; // codon table, no deflate
-pub const FLAG_ANS_O1: u8 = 0x04;     // o1 ANS pretrained entropy coding
 
 #[derive(Debug)]
 pub enum PipelineError {
@@ -109,17 +107,6 @@ fn frame_deflate(tokenized: Vec<u8>) -> Vec<u8> {
     frame::encode(&f)
 }
 
-fn frame_ans_o1(tokenized: Vec<u8>) -> Vec<u8> {
-    match crate::codec::ans::compress_o1_pretrained(&tokenized, ANS_O1_TABLE) {
-        Some(encoded) => {
-            let mut f = Frame::new(encoded, true);
-            f.flags = FLAG_ANS_O1;
-            frame::encode(&f)
-        }
-        None => frame_codon_only(tokenized),
-    }
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 pub fn compress(data: &[u8]) -> Vec<u8> {
@@ -133,16 +120,14 @@ pub fn compress_mode(data: &[u8], mode: &Mode) -> (Vec<u8>, &'static str) {
         Mode::CodonOnly => (frame_codon_only(tokenized), "codon"),
         Mode::Deflate => (frame_deflate(tokenized), "deflate"),
         Mode::Auto => {
-            // Try all three, pick smallest
+            // Try both, pick smaller
             let codon_frame = frame_codon_only(tokenized.clone());
-            let ans_frame = frame_ans_o1(tokenized.clone());
             let deflate_frame = frame_deflate(tokenized);
-            let best = [codon_frame, ans_frame, deflate_frame]
-                .into_iter()
-                .min_by_key(|f| f.len())
-                .unwrap();
-            let mode = "auto";
-            (best, mode)
+            if codon_frame.len() <= deflate_frame.len() {
+                (codon_frame, "codon")
+            } else {
+                (deflate_frame, "deflate")
+            }
         }
     }
 }
@@ -150,10 +135,7 @@ pub fn compress_mode(data: &[u8], mode: &Mode) -> (Vec<u8>, &'static str) {
 pub fn decompress(data: &[u8]) -> Result<Vec<u8>, PipelineError> {
     let view = frame::decode_view(data).map_err(PipelineError::Frame)?;
 
-    let payload = if view.flags & FLAG_ANS_O1 != 0 {
-        crate::codec::ans::decompress_o1_pretrained(view.payload, ANS_O1_TABLE)
-            .ok_or_else(|| PipelineError::Inflate("ans_o1 decode failed".into()))?
-    } else if view.flags & FLAG_COMPRESSION != 0 {
+    let payload = if view.flags & FLAG_COMPRESSION != 0 {
         inflate(view.payload).map_err(PipelineError::Inflate)?
     } else {
         view.payload.to_vec()

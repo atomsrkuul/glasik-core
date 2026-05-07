@@ -8,15 +8,15 @@ use crate::level4;
 
 pub const RECOMPRESS_INTERVAL: u64 = 50;
 
-pub struct SlidingTokenizerV3 {
+pub struct SlidingTokenizerL4 {
     inner: SlidingTokenizerV2,
     compressed_snapshot: Option<Vec<u8>>,
     last_compress_batch: u64,
 }
 
-impl SlidingTokenizerV3 {
+impl SlidingTokenizerL4 {
     pub fn new() -> Self {
-        SlidingTokenizerV3 {
+        SlidingTokenizerL4 {
             inner: SlidingTokenizerV2::new(),
             compressed_snapshot: None,
             last_compress_batch: 0,
@@ -24,7 +24,7 @@ impl SlidingTokenizerV3 {
     }
 
     pub fn new_with_static(entries: Vec<(Vec<u8>, u64, u64)>) -> Self {
-        SlidingTokenizerV3 {
+        SlidingTokenizerL4 {
             inner: SlidingTokenizerV2::new_with_static(entries),
             compressed_snapshot: None,
             last_compress_batch: 0,
@@ -65,7 +65,7 @@ impl SlidingTokenizerV3 {
     /// Restore window from compressed snapshot
     pub fn restore_from_snapshot(snapshot: &[u8]) -> Self {
         let entries = level4::decompress_window(snapshot);
-        let mut tok = SlidingTokenizerV3::new();
+        let mut tok = SlidingTokenizerL4::new();
         tok.inner.import_dict(1, entries);
         tok.compressed_snapshot = Some(snapshot.to_vec());
         tok
@@ -76,7 +76,7 @@ impl SlidingTokenizerV3 {
     }
 }
 
-impl Default for SlidingTokenizerV3 {
+impl Default for SlidingTokenizerL4 {
     fn default() -> Self { Self::new() }
 }
 
@@ -86,7 +86,7 @@ mod tests {
 
     #[test]
     fn test_l4_encode_decode() {
-        let mut tok = SlidingTokenizerV3::new();
+        let mut tok = SlidingTokenizerL4::new();
         let data = b"user: hello assistant: how can I help you today ".repeat(20);
         for _ in 0..100 {
             tok.encode(&data);
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn test_snapshot_restore() {
-        let mut tok = SlidingTokenizerV3::new();
+        let mut tok = SlidingTokenizerL4::new();
         let data = b"user: hello assistant: how can I help you today ".repeat(20);
         for _ in 0..100 {
             tok.encode(&data);
@@ -108,7 +108,7 @@ mod tests {
         println!("Snapshot size: {}B", snapshot.len());
 
         // Restore from snapshot
-        let mut tok2 = SlidingTokenizerV3::restore_from_snapshot(&snapshot);
+        let mut tok2 = SlidingTokenizerL4::restore_from_snapshot(&snapshot);
         let (e1, _) = tok.stats();
         let (e2, _) = tok2.stats();
         println!("Original: {} entries, Restored: {} entries", e1, e2);

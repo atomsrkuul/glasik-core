@@ -29,18 +29,23 @@ impl DictEntry {
 }
 
 fn scan_length(buf: &[u8], len: usize, out: &mut AHashMap<Vec<u8>, usize>) {
-    if buf.len() < len { return; }
+    if buf.len() < len {
+        return;
+    }
     let mut base_pow: u64 = 1;
     for _ in 0..len {
         base_pow = ((base_pow as u128 * BASE as u128) % MOD as u128) as u64;
     }
-    let mut map: AHashMap<u64, (u32, usize)> = AHashMap::with_capacity(buf.len() / len + 1);
+    let mut map: AHashMap<u64, (u32, usize)> =
+        AHashMap::with_capacity(buf.len() / len + 1);
     let mut hash: u64 = 0;
     for i in 0..len {
         hash = ((hash as u128 * BASE as u128 + buf[i] as u128) % MOD as u128) as u64;
     }
     if buf[0] >= 0x20 || buf[0] == b'\n' {
-        map.entry(hash).and_modify(|(c, _)| *c += 1).or_insert((1, 0));
+        map.entry(hash)
+            .and_modify(|(c, _)| *c += 1)
+            .or_insert((1, 0));
     }
     for i in 1..=buf.len() - len {
         let h = (hash as u128 * BASE as u128 + buf[i + len - 1] as u128 + MOD as u128 * 2
@@ -49,18 +54,28 @@ fn scan_length(buf: &[u8], len: usize, out: &mut AHashMap<Vec<u8>, usize>) {
         hash = h as u64;
         let b = buf[i];
         if b >= 0x20 || b == b'\n' || b == b'\r' {
-            map.entry(hash).and_modify(|(c, _)| *c += 1).or_insert((1, i));
+            map.entry(hash)
+                .and_modify(|(c, _)| *c += 1)
+                .or_insert((1, i));
         }
     }
     for (_, (count, pos)) in map {
-        if (count as usize) < MIN_FREQ { continue; }
-        if pos + len > buf.len() { continue; }
+        if (count as usize) < MIN_FREQ {
+            continue;
+        }
+        if pos + len > buf.len() {
+            continue;
+        }
         let bytes = buf[pos..pos + len].to_vec();
         let e = out.entry(bytes).or_insert(0);
-        if count as usize > *e { *e = count as usize; }
+        if count as usize > *e {
+            *e = count as usize;
+        }
     }
 }
 
+/// Per-length saving weights — shared across calls via thread_local.
+/// Tracks which lengths yield the most saving, biases future scans.
 fn length_weights(max_len: usize) -> Vec<(usize, f64)> {
     use std::cell::RefCell;
     thread_local! {
@@ -73,29 +88,14 @@ fn length_weights(max_len: usize) -> Vec<(usize, f64)> {
         if max_len < MIN_STR_LEN {
             return vec![];
         }
-        // Scan every length, but skip low-weight lengths after warmup
-        // Cold start (no weights yet): scan all. Warm: skip lengths below threshold.
-        let total_weight: f64 = w.values().sum();
-        let warmed = total_weight > 0.1;
-        let threshold = if warmed { 0.3 } else { 0.0 };
+        let range = max_len - MIN_STR_LEN;
+        let step = (range / MAX_LENGTHS).max(1);
         let mut lengths = Vec::new();
         let mut len = MIN_STR_LEN;
         while len <= max_len {
             let weight = w.get(&len).copied().unwrap_or(1.0);
-            if weight >= threshold {
-                lengths.push((len, weight));
-            }
-            len += 1;
-        }
-        // Always scan at least MIN_LENGTHS lengths even if weights say otherwise
-        if lengths.len() < 6 {
-            lengths.clear();
-            let mut len = MIN_STR_LEN;
-            while len <= max_len {
-                let weight = w.get(&len).copied().unwrap_or(1.0);
-                lengths.push((len, weight));
-                len += 1;
-            }
+            lengths.push((len, weight));
+            len += step;
         }
         // Sort by weight descending -- scan most productive lengths first
         lengths.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
@@ -130,17 +130,22 @@ fn build_frequency_map(buf: &[u8]) -> AHashMap<Vec<u8>, usize> {
     if max_len < MIN_STR_LEN {
         return freq;
     }
-    let mut savings_per_len: AHashMap<usize, usize> = AHashMap::new();
-    for len in MIN_STR_LEN..=max_len {
-        let before: usize = freq.values().sum();
-        scan_length(buf, len, &mut freq);
-        let after: usize = freq.values().sum();
-        savings_per_len.insert(len, after.saturating_sub(before));
+
+    let lengths = length_weights(max_len);
+    let mut savings_per_len: AHashMap<usize, usize> =
+        AHashMap::new();
+
+    for (len, _weight) in &lengths {
+        let before = freq.values().map(|&v: &usize| v).sum::<usize>();
+        scan_length(buf, *len, &mut freq);
+        let after = freq.values().sum::<usize>();
+        savings_per_len.insert(*len, after.saturating_sub(before));
     }
+
+    // Feed results back into weight table
     update_weights(&savings_per_len);
     freq
 }
-
 
 fn select_entries(freq: AHashMap<Vec<u8>, usize>) -> Vec<DictEntry> {
     let mut candidates: Vec<DictEntry> = freq
@@ -153,17 +158,25 @@ fn select_entries(freq: AHashMap<Vec<u8>, usize>) -> Vec<DictEntry> {
             if saving == 0 {
                 return None;
             }
-            Some(DictEntry { bytes, freq: count, saving })
+            Some(DictEntry {
+                bytes,
+                freq: count,
+                saving,
+            })
         })
         .collect();
     candidates.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
     let mut selected: Vec<DictEntry> = Vec::new();
-    for c in candidates {
-        if selected.len() >= MAX_ENTRIES { break; }
-        let dominated = selected.iter().any(|e| {
-            e.bytes.windows(c.len()).any(|w| w == c.bytes.as_slice())
-        });
-        if !dominated { selected.push(c); }
+    'outer: for c in candidates {
+        if selected.len() >= MAX_ENTRIES {
+            break;
+        }
+        for e in &selected {
+            if e.bytes.windows(c.len()).any(|w| w == c.bytes.as_slice()) {
+                continue 'outer;
+            }
+        }
+        selected.push(c);
     }
     selected
 }
