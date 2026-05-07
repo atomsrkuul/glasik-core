@@ -172,3 +172,23 @@ async function verifyRoundTrip(turns, label) {
     console.log('\n' + '='.repeat(60));
   }
 })();
+
+// ---- conversations.json loader (Claude export format) ----
+function loadClaudeConversations() {
+  const turns = [];
+  try {
+    const data = JSON.parse(fs.readFileSync('/home/boot/Downloads/Corpora/conversations.json', 'utf8'));
+    for (const conv of data) {
+      for (const msg of (conv.chat_messages || [])) {
+        let text = msg.text || '';
+        if (!text && Array.isArray(msg.content)) {
+          text = msg.content.map(b => b.text || '').join(' ');
+        }
+        text = text.trim();
+        if (text.length > 10) turns.push({ content: text });
+      }
+    }
+  } catch(e) { console.log('conversations.json error: ' + e.message); }
+  console.log('Loaded conversations.json: ' + turns.length + ' turns');
+  return turns;
+}
