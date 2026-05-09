@@ -238,7 +238,7 @@ impl GlasikSlidingV2 {
     }
 
     fn encode_ac_raw(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
-        let tokenized = self.inner.encode_ac(data);
+        let tokenized = self.inner.encode(data);
         Ok(PyBytes::new(py, &tokenized).into())
     }
 
@@ -246,7 +246,7 @@ impl GlasikSlidingV2 {
         use flate2::{write::DeflateEncoder, Compression};
         use std::io::Write;
         use pyo3::exceptions::PyRuntimeError;
-        let tokenized = self.inner.encode_ac(data);
+        let tokenized = self.inner.encode(data);
         let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
         enc.write_all(&tokenized).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         let deflated = enc.finish().map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
@@ -290,7 +290,7 @@ impl GlasikSlidingV2 {
     }
 
     fn compress_backref(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
-        let tokenized = self.inner.encode_ac(data);
+        let tokenized = self.inner.encode(data);
         let backreffed = crate::codec::backref::compress(&tokenized);
         let out = if backreffed.len() < tokenized.len() { backreffed } else { tokenized };
         Ok(PyBytes::new(py, &out).into())
@@ -298,7 +298,7 @@ impl GlasikSlidingV2 {
 
 
     fn compress_v4(&mut self, py: Python, data: &[u8]) -> PyResult<Py<PyBytes>> {
-        let tokenized = self.inner.encode_ac(data);
+        let tokenized = self.inner.encode(data);
         let backreffed = crate::codec::backref::compress(&tokenized);
         let ans_out = crate::codec::ans::compress(&backreffed);
         let out = if ans_out.len() < backreffed.len() {
@@ -367,7 +367,7 @@ impl GlasikSlidingV2 {
         use flate2::{write::DeflateEncoder, Compression};
         use std::io::Write;
 
-        let tokenized = self.inner.encode(data);
+        let tokenized = self.inner.encode_ac(data);
 
         // Deflate the tokenized output (dict not in frame, so deflate sees clean data)
         let mut enc = DeflateEncoder::new(Vec::new(), Compression::best());
