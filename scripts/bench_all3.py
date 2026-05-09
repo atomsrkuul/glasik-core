@@ -5,7 +5,7 @@ from pathlib import Path
 def load_wildchat(n, seed):
     random.seed(seed)
     chunks = []
-    for f in sorted(Path("/home/boot/Downloads/WildChat").glob("*.parquet")):
+    for f in sorted(Path("/home/boot/Downloads/Corpora/WildChat").glob("*.parquet")):
         t = pq.read_table(f)
         for i in range(len(t)):
             for turn in t['conversation'][i].as_py():
@@ -18,7 +18,7 @@ def load_wildchat(n, seed):
 def load_lmsys(n, seed):
     random.seed(seed)
     chunks = []
-    for f in sorted(Path("/home/boot/Downloads/lmsys").glob("*.parquet")):
+    for f in sorted(Path("/home/boot/Downloads/Corpora/lmsys").glob("*.parquet")):
         t = pq.read_table(f)
         for i in range(len(t)):
             conv = t['conversation'][i].as_py()
@@ -32,7 +32,7 @@ def load_lmsys(n, seed):
 
 def load_sharegpt(n, seed):
     random.seed(seed)
-    sgpt = json.loads(Path("/home/boot/Downloads/sharegpt-v3.json").read_bytes())
+    sgpt = json.loads(Path("/home/boot/Downloads/Corpora/sharegpt-v3.json").read_bytes())
     chunks = []
     for conv in sgpt:
         for turn in conv.get("conversations", []):

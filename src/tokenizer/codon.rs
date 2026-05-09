@@ -248,7 +248,7 @@ pub fn decode(buf: &[u8], entries: &[DictEntry]) -> Vec<u8> {
 }
 
 /// Escape literal ESCAPE bytes only -- used when dictionary is empty.
-fn escape_only(buf: &[u8]) -> Vec<u8> {
+pub fn escape_only(buf: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(buf.len());
     for &b in buf {
         if b == ESCAPE {
@@ -830,4 +830,51 @@ pub fn build_ac(entries: &[DictEntry]) -> Option<aho_corasick::AhoCorasick> {
     AhoCorasick::builder()
         .match_kind(MatchKind::LeftmostLongest)
         .build(&patterns).ok()
+}
+
+/// Build AC automaton for overlapping search (Standard match kind required)
+pub fn build_ac_overlapping(entries: &[DictEntry]) -> Option<(aho_corasick::AhoCorasick, Vec<(usize, u8)>)> {
+    use aho_corasick::{AhoCorasick, MatchKind};
+    if entries.is_empty() { return None; }
+    let mut sorted: Vec<&DictEntry> = entries.iter()
+        .filter(|e| e.bytes.len() >= 4)
+        .collect();
+    sorted.sort_unstable_by(|a, b| b.saving.cmp(&a.saving));
+    let meta: Vec<(usize, u8)> = sorted.iter().enumerate().map(|(i, e)| {
+        let tok = if i < 254 { (i + 1) as u8 } else { 0 };
+        (e.bytes.len(), tok)
+    }).collect();
+    let patterns: Vec<&[u8]> = sorted.iter().map(|e| e.bytes.as_slice()).collect();
+    let ac = AhoCorasick::builder()
+        .match_kind(MatchKind::Standard)
+        .build(&patterns).ok()?;
+    Some((ac, meta))
+}
+
+/// Encode using overlapping AC search + greedy assembly
+/// Keeps only the longest match at each start position, then greedy assembles.
+pub fn encode_ac_greedy(buf: &[u8], ac: &aho_corasick::AhoCorasick, meta: &[(usize, u8)]) -> Vec<u8> {
+    if buf.is_empty() { return Vec::new(); }
+    // Collect all overlapping matches
+    let mut all_matches: Vec<(usize, u8, usize)> = Vec::new();
+    for m in ac.find_overlapping_iter(buf) {
+        let pat_idx = m.pattern().as_usize();
+        if pat_idx >= meta.len() { continue; }
+        let (len, tok) = meta[pat_idx];
+        if tok == 0 { continue; }
+        if m.start() + len <= buf.len() {
+            all_matches.push((m.start(), tok, len));
+        }
+    }
+    // Keep only longest match per start position
+    all_matches.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.2.cmp(&a.2)));
+    let mut matches: Vec<(usize, u8, usize)> = Vec::new();
+    let mut last_pos = usize::MAX;
+    for m in all_matches {
+        if m.0 != last_pos {
+            last_pos = m.0;
+            matches.push(m);
+        }
+    }
+    assemble_from_matches(buf, &matches)
 }

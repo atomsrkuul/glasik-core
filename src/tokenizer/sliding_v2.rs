@@ -366,6 +366,21 @@ impl SlidingTokenizerV2 {
         }
     }
 
+    /// Encode using overlapping AC search + greedy assembly.
+    /// Closes the ~5% ratio gap vs FirstByteIndex by considering all match positions.
+    pub fn encode_ac_greedy(&mut self, buf: &[u8]) -> Vec<u8> {
+        let _ = self.get_index();
+        let active = if !self.cached_entries.is_empty() && !self.index_dirty {
+            self.cached_entries.clone()
+        } else {
+            self.active_entries()
+        };
+        match crate::tokenizer::codon::build_ac_overlapping(&active) {
+            Some((ac, meta)) => crate::tokenizer::codon::encode_ac_greedy(buf, &ac, &meta),
+            None => crate::tokenizer::codon::escape_only(buf),
+        }
+    }
+
     fn active_entries(&self) -> Vec<DictEntry> {
         if !self.cached_entries.is_empty() && !self.index_dirty {
             return self.cached_entries.clone();
