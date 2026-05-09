@@ -21,28 +21,8 @@ const restored = await decompress(compressed);
 // Buffer.from(restored).toString() === messageString
 ```
 
-## Benchmark Results (v4.4.0)
+## Benchmark Results (v4.4.4)
 
-Verified locally (4 corpora x 3 seeds = 12 runs, 50/50 round-trip pass each).
+Tested on ShareGPT, WildChat, LMSYS corpora (3 seeds each, 2000 chunks/run).
 
-| Corpus | GN+GCdict vs brotli-6 |
-\--------|-----------------------|
-| WildChat | +6.7 to +8.5% |
-| ShareGPT | +42 to +55% |
-| LMSYS | +13 to +15% |
-| Ubuntu IRC | +91 to +93% |
-
-Gn split-stream stage also beats brotli on throughput across all corpora.
-
-## Source
-
-[github.com/atomsrkuul/glasik-core](https://github.com/atomsrkuul/glasik-core) - MIT
-
-## Academic
-
-arXiv preprint pending (cs.IR)
-
-If you have 3+ published cs papers and would like to endorse this work for arXiv submission:
-- arXiv Username: RobertRider00
-- Endorsement Code: 7HWUBA (cs.IR)
-- Contact: atomsrkuul@gmail.com
+**Compression ratio vs brotli-6 (warm session,
